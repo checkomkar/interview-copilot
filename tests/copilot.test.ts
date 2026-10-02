@@ -407,7 +407,7 @@ describe('session -> copilot integration', () => {
     expect(tokens).toEqual([`${questions[0].id}:Use `, `${questions[0].id}:a hash map.`])
     expect(done).toHaveLength(1)
     // Coding questions get the larger token budget.
-    expect(llm.requests[0].maxTokens).toBe(1500)
+    expect(llm.requests[0].maxTokens).toBe(DEFAULT_SETTINGS.llm.maxTokensCoding)
     await session.stop()
   })
 })

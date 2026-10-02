@@ -82,7 +82,17 @@ export class AnthropicProvider implements LlmProvider {
             }))
           }
         : {}),
-      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: req.messages.map((m) => ({
+        role: m.role,
+        content:
+          typeof m.content === 'string'
+            ? m.content
+            : m.content.map((p) =>
+                p.type === 'text'
+                  ? { type: 'text' as const, text: p.text }
+                  : { type: 'image' as const, source: { type: 'base64' as const, media_type: p.mediaType, data: p.data } }
+              )
+      })),
       ...modelOptions(req.model)
     }
   }

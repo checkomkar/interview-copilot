@@ -1,5 +1,5 @@
 import type { AnswerUsage } from '@shared/ipc'
-import { LLM_PROVIDER_LABELS, MAX_MODEL_CHAIN, splitModels, type CompatProviderId, type ReasoningEffort } from '@shared/settings'
+import { LLM_PROVIDER_LABELS, MAX_MODEL_CHAIN, splitModels, type CompatProviderId, type ModelRole, type ReasoningEffort } from '@shared/settings'
 import { createLogger } from '../../logger'
 import { cooldownMs, parseRetryAfter, type Cooldowns } from './Cooldowns'
 import { LlmError, type LlmProvider, type LlmPurpose, type LlmRequest, type LlmResult, type LlmStreamHandlers } from './LlmProvider'
@@ -21,7 +21,7 @@ interface Flavor {
   includeUsage: boolean
   /** Reasoning tokens count toward max_tokens on these models; leave room so the answer isn't cut off. */
   reasoningHeadroom: number
-  reasoning: (model: string, effort: ReasoningEffort, purpose: LlmPurpose | undefined) => Record<string, unknown>
+  reasoning: (model: string, effort: ReasoningEffort, purpose: LlmPurpose | undefined, role: ModelRole | undefined) => Record<string, unknown>
 }
 
 const GROQ_QWEN_EFFORTS: ReasoningEffort[] = ['none', 'default', 'low', 'medium', 'high']
@@ -35,7 +35,11 @@ export const FLAVORS: Record<CompatProviderId, Flavor> = {
     includeUsage: false,
     reasoningHeadroom: 0,
     // Answers only: sending effort to Haiku-class models would turn thinking on and slow the classifier.
-    reasoning: (_m, effort, purpose) => (purpose === 'answer' && effort !== 'default' ? { reasoning: { effort, exclude: true } } : {})
+    // Screenshots: thinking off — reasoning models spent the whole budget on it with images.
+    reasoning: (_m, effort, purpose, role) => {
+      if (role === 'vision') return { reasoning: { enabled: false } }
+      return purpose === 'answer' && effort !== 'default' ? { reasoning: { effort, exclude: true } } : {}
+    }
   },
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
@@ -43,15 +47,16 @@ export const FLAVORS: Record<CompatProviderId, Flavor> = {
     cacheControl: false,
     includeUsage: true,
     reasoningHeadroom: 1024,
-    reasoning: (model, effort, purpose) => {
+    reasoning: (model, effort, purpose, role) => {
       if (/gpt-oss/.test(model)) {
         // gpt-oss always reasons (low|medium|high); keep the reasoning out of the reply.
         const e = purpose === 'answer' && LOW_MED_HIGH.includes(effort) ? effort : 'low'
         return { reasoning_effort: e, include_reasoning: false }
       }
       if (/qwen/.test(model)) {
-        // Qwen would otherwise put <think> text in the reply.
-        const e = purpose === 'answer' ? effort : 'none'
+        // Qwen would otherwise put <think> text in the reply. Screenshots: no thinking — with images
+        // it spent the whole budget (and Groq's 1,000 output tokens/min free limit) thinking.
+        const e = purpose === 'answer' && role !== 'vision' ? effort : 'none'
         return { reasoning_format: 'hidden', ...(GROQ_QWEN_EFFORTS.includes(e) && e !== 'default' ? { reasoning_effort: e } : {}) }
       }
       return {}
@@ -81,6 +86,8 @@ interface Chunk {
     prompt_tokens?: number
     completion_tokens?: number
     prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number }
+    /** OpenRouter: what the request cost, in USD. */
+    cost?: number
   }
   error?: ErrorBody
 }
@@ -221,13 +228,24 @@ export class OpenAICompatProvider implements LlmProvider {
         }
         const ms = cooldownMs(e.kind, e.extra.retryAfterMs, e.status)
         if (ms === 0) throw e
-        for (const m of groups[i]) this.opts.cooldowns.mark(key(m), ms)
+        for (const m of this.culprits(groups[i], e)) this.opts.cooldowns.mark(key(m), ms)
         const next = groups[i + 1]
         this.log.warn(`${groups[i].join(', ')}: ${e.message} (skipping for ${Math.round(ms / 1000)} s)${next ? `; trying ${next.join(', ')}` : ''}`)
         last = e
       }
     }
     throw last ?? new LlmError('other', `${this.label} request failed`)
+  }
+
+  /**
+   * Which models of a group to put on cooldown. A rate limit covers the whole group (OpenRouter
+   * fell through all of them); an empty answer came from one model — or from the free router,
+   * when the model that served isn't one we listed.
+   */
+  private culprits(group: string[], e: LlmError): string[] {
+    if (e.kind !== 'empty' || !e.extra.model) return group
+    if (group.includes(e.extra.model)) return [e.extra.model]
+    return group.includes(FREE_ROUTER) ? [FREE_ROUTER] : group
   }
 
   private async post(req: LlmRequest, models: string[], stream: boolean): Promise<Response> {
@@ -262,7 +280,17 @@ export class OpenAICompatProvider implements LlmProvider {
           : { role: 'system', content: req.system.map((b) => b.text).join('\n\n') }
       )
     }
-    for (const m of req.messages) messages.push({ role: m.role, content: m.content })
+    for (const m of req.messages) {
+      messages.push({
+        role: m.role,
+        content:
+          typeof m.content === 'string'
+            ? m.content
+            : m.content.map((p) =>
+                p.type === 'text' ? { type: 'text', text: p.text } : { type: 'image_url', image_url: { url: `data:${p.mediaType};base64,${p.data}` } }
+              )
+      })
+    }
     return {
       // Several models: OpenRouter falls through them server-side on rate limits / downtime.
       ...(models.length > 1 ? { models } : { model: models[0] }),
@@ -270,12 +298,12 @@ export class OpenAICompatProvider implements LlmProvider {
       max_tokens: req.maxTokens + f.reasoningHeadroom,
       stream,
       ...(stream && f.includeUsage ? { stream_options: { include_usage: true } } : {}),
-      ...(this.noReasoning.has(models[0]) ? {} : f.reasoning(models[0], this.opts.getReasoningEffort(), req.purpose))
+      ...(this.noReasoning.has(models[0]) ? {} : f.reasoning(models[0], this.opts.getReasoningEffort(), req.purpose, req.role))
     }
   }
 
   private sendsReasoning(model: string, req: LlmRequest): boolean {
-    return Object.keys(this.flavor.reasoning(model, this.opts.getReasoningEffort(), req.purpose)).length > 0
+    return Object.keys(this.flavor.reasoning(model, this.opts.getReasoningEffort(), req.purpose, req.role)).length > 0
   }
 
   private async httpError(res: Response): Promise<LlmError> {
@@ -365,6 +393,10 @@ export async function* sseChunks(body: ReadableStream<Uint8Array>): AsyncGenerat
 
 function toResult(text: string, finish: string | null, chunk: Chunk, requestedModel: string): LlmResult {
   if (finish === 'content_filter') throw new LlmError('refusal', 'The model declined to answer this one.')
+  const model = chunk.model ?? requestedModel
+  if (finish === 'length' && !text.trim()) {
+    throw new LlmError('empty', `${model} used its whole token budget thinking and gave no answer.`, undefined, { model })
+  }
   const u = chunk.usage ?? {}
   const cacheRead = u.prompt_tokens_details?.cached_tokens ?? 0
   const cacheWrite = u.prompt_tokens_details?.cache_write_tokens ?? 0
@@ -372,13 +404,14 @@ function toResult(text: string, finish: string | null, chunk: Chunk, requestedMo
     text,
     truncated: finish === 'length',
     usage: {
-      model: chunk.model ?? requestedModel,
+      model,
       ...(chunk.provider ? { provider: chunk.provider } : {}),
       // OpenAI-style prompt_tokens includes cached tokens; report them separately like Anthropic does.
       inputTokens: Math.max(0, (u.prompt_tokens ?? 0) - cacheRead - cacheWrite),
       outputTokens: u.completion_tokens ?? 0,
       cacheReadTokens: cacheRead,
-      cacheWriteTokens: cacheWrite
+      cacheWriteTokens: cacheWrite,
+      ...(typeof u.cost === 'number' ? { costUsd: u.cost } : {})
     }
   }
 }

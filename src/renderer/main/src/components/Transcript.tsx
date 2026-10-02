@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { useApp } from '../store'
 
-/** Live transcript; Interviewer on the left, Me on the right. */
+/** Live transcript; the other side (Interviewer, or Call in Work Mode) on the left, Me on the right. */
 export function Transcript() {
   const utterances = useApp((s) => s.utterances)
+  const them = useApp((s) => (s.settings?.mode === 'interview' ? 'Interviewer' : 'Call'))
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
@@ -33,7 +34,7 @@ export function Transcript() {
           return (
             <li key={u.id} className={`flex flex-col ${me ? 'items-end' : 'items-start'}`}>
               <span className={`mb-1 text-[11px] font-medium tracking-wide uppercase ${me ? 'text-me' : 'text-them'}`}>
-                {me ? 'Me' : 'Interviewer'} · {new Date(u.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {me ? 'Me' : them} · {new Date(u.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
               <p
                 className={`max-w-[80%] rounded-lg border px-3.5 py-2 text-[14px] leading-relaxed ${

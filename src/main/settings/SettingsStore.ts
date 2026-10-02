@@ -6,6 +6,7 @@ import {
   API_KEY_PROVIDERS,
   DEFAULT_SETTINGS,
   SettingsSchema,
+  applyLegacyMode,
   mergeSettings,
   upgradeSettings,
   type ApiKeyProvider,
@@ -16,6 +17,9 @@ import { createLogger, registerSecret } from '../logger'
 
 const log = createLogger('settings')
 
+/** secrets.json keys of secrets other than API keys. */
+const SECRET_PREFIX = 'secret:'
+
 /**
  * Non-secret settings live in settings.json. API keys are encrypted with
  * Electron safeStorage (DPAPI on Windows) and stored base64 in secrets.json.
@@ -25,7 +29,8 @@ export class SettingsStore extends EventEmitter {
   private settings: Settings
   private readonly settingsPath: string
   private readonly secretsPath: string
-  private encryptedKeys: Partial<Record<ApiKeyProvider, string>> = {}
+/** API keys by provider, and other secrets (sign-in tokens) under `secret:<name>`; all encrypted. */
+  private encryptedKeys: Record<string, string> = {}
 
   constructor(dir: string) {
     super()
@@ -36,12 +41,17 @@ export class SettingsStore extends EventEmitter {
     if (upgraded) {
       this.settings = upgraded
       atomicWrite(this.settingsPath, JSON.stringify(this.settings, null, 2))
-      log.info('upgraded OpenRouter free models to the fallback-chain preset')
+      log.info('upgraded saved settings to current defaults')
     }
     this.encryptedKeys = this.loadSecrets()
     for (const p of API_KEY_PROVIDERS) {
       const k = this.getApiKey(p)
       if (k) registerSecret(k)
+    }
+    for (const name of Object.keys(this.encryptedKeys)) {
+      if (!name.startsWith(SECRET_PREFIX)) continue
+      const v = this.getSecret(name.slice(SECRET_PREFIX.length))
+      if (v) registerSecret(v)
     }
   }
 
@@ -58,12 +68,33 @@ export class SettingsStore extends EventEmitter {
   }
 
   getApiKey(provider: ApiKeyProvider): string | null {
-    const enc = this.encryptedKeys[provider]
+    return this.decrypt(provider)
+  }
+
+  /** A secret other than an API key (e.g. a Teams sign-in token); main process only. */
+  getSecret(name: string): string | null {
+    return this.decrypt(`${SECRET_PREFIX}${name}`)
+  }
+
+  /** Store (or with null, remove) a secret, encrypted like the API keys and redacted from logs. */
+  setSecret(name: string, value: string | null): void {
+    const key = `${SECRET_PREFIX}${name}`
+    if (!value) delete this.encryptedKeys[key]
+    else {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable; refusing to store a secret')
+      registerSecret(value)
+      this.encryptedKeys[key] = safeStorage.encryptString(value).toString('base64')
+    }
+    atomicWrite(this.secretsPath, JSON.stringify(this.encryptedKeys, null, 2))
+  }
+
+  private decrypt(key: string): string | null {
+    const enc = this.encryptedKeys[key]
     if (!enc) return null
     try {
       return safeStorage.decryptString(Buffer.from(enc, 'base64'))
     } catch (err) {
-      log.error(`failed to decrypt ${provider} key`, err)
+      log.error(`failed to decrypt ${key.startsWith(SECRET_PREFIX) ? key : `${key} key`}`, err)
       return null
     }
   }
@@ -91,7 +122,7 @@ export class SettingsStore extends EventEmitter {
   private loadSettings(): Settings {
     if (!existsSync(this.settingsPath)) return DEFAULT_SETTINGS
     try {
-      const raw = JSON.parse(readFileSync(this.settingsPath, 'utf8'))
+      const raw = applyLegacyMode(JSON.parse(readFileSync(this.settingsPath, 'utf8')))
       const parsed = SettingsSchema.safeParse(raw)
       if (parsed.success) return parsed.data
       log.warn('settings.json invalid, merging valid parts over defaults', parsed.error.issues)
@@ -102,12 +133,14 @@ export class SettingsStore extends EventEmitter {
     }
   }
 
-  private loadSecrets(): Partial<Record<ApiKeyProvider, string>> {
+  private loadSecrets(): Record<string, string> {
     if (!existsSync(this.secretsPath)) return {}
     try {
       const raw = JSON.parse(readFileSync(this.secretsPath, 'utf8')) as Record<string, unknown>
-      const out: Partial<Record<ApiKeyProvider, string>> = {}
-      for (const p of API_KEY_PROVIDERS) if (typeof raw[p] === 'string') out[p] = raw[p] as string
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(raw)) {
+        if (typeof v === 'string' && ((API_KEY_PROVIDERS as readonly string[]).includes(k) || k.startsWith(SECRET_PREFIX))) out[k] = v
+      }
       return out
     } catch (err) {
       log.error('could not read secrets.json', err)

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AudioSource, LatencyStage, NavigateTarget, SessionState, TranscriptUpdate } from '@shared/ipc'
+import type { AudioSource, CostUpdate, LatencyStage, NavigateTarget, SessionState, TranscriptUpdate } from '@shared/ipc'
 import type { ApiKeyStatus, DeepPartial, Settings } from '@shared/settings'
 
 const MAX_UTTERANCES = 500
@@ -10,9 +10,12 @@ interface AppState {
   settings: Settings | null
   keys: ApiKeyStatus | null
   session: SessionState
+  cost: CostUpdate | null
   utterances: TranscriptUpdate[]
   levels: Record<AudioSource, number>
   latency: Record<LatencyStage, number[]>
+  /** Teams suggestions waiting for review (FR-T4), shown on the Projects tab. */
+  pendingUpdates: number
   banner: string | null
   setTab: (tab: NavigateTarget) => void
   setBanner: (msg: string | null) => void
@@ -28,9 +31,11 @@ export const useApp = create<AppState>((set) => ({
   settings: null,
   keys: null,
   session: { status: 'idle', elapsed: 0, cost: 0 },
+  cost: null,
   utterances: [],
   levels: { loopback: 0, mic: 0 },
   latency: emptyLatency(),
+  pendingUpdates: 0,
   banner: null,
   setTab: (tab) => set({ tab }),
   setBanner: (banner) => set({ banner }),
@@ -82,6 +87,8 @@ export function initStore(): void {
   void api.settings.get().then((settings) => useApp.setState({ settings }))
   void api.settings.apiKeyStatus().then((keys) => useApp.setState({ keys }))
   void api.session.getState().then((session) => useApp.setState({ session }))
+  void api.cost.get().then((cost) => useApp.setState({ cost }))
+  api.cost.onUpdate((cost) => useApp.setState({ cost }))
 
   api.settings.onChanged((settings) => useApp.setState({ settings }))
   api.session.onState((session) => {
@@ -96,4 +103,6 @@ export function initStore(): void {
     }))
   )
   api.ui.onNavigate((tab) => useApp.setState({ tab }))
+  void api.work.proposals().then((p) => useApp.setState({ pendingUpdates: p.length }))
+  api.work.onProposals((p) => useApp.setState({ pendingUpdates: p.length }))
 }

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { LatencyStage } from '@shared/ipc'
+import type { DisplayInfo, LatencyStage } from '@shared/ipc'
 import {
+  STT_PROVIDERS,
+  STT_PROVIDER_LABELS,
   LLM_PROVIDERS,
   LLM_PROVIDER_LABELS,
   MAX_MODEL_CHAIN,
@@ -17,11 +19,13 @@ import {
 import { useApp } from '../store'
 
 /** Hotkeys from later phases are saved but not bound yet. */
-const CURRENT_PHASE = 2
+const CURRENT_PHASE = 4
 
 const HOTKEY_LABELS: Record<HotkeyAction, { label: string; phase: number }> = {
   startStop: { label: 'Start / stop session', phase: 1 },
   toggleOverlay: { label: 'Show / hide overlay', phase: 1 },
+  toggleMain: { label: 'Show / hide dashboard', phase: 1 },
+  quitApp: { label: 'Quit Cue', phase: 1 },
   answerNow: { label: 'Answer last utterance now', phase: 2 },
   regenerate: { label: 'Regenerate', phase: 2 },
   shorter: { label: 'Shorter', phase: 2 },
@@ -30,7 +34,8 @@ const HOTKEY_LABELS: Record<HotkeyAction, { label: string; phase: number }> = {
   nextAnswer: { label: 'Next answer', phase: 2 },
   toggleVoiceAsk: { label: 'Voice questions on / off', phase: 2 },
   focusAsk: { label: 'Type a question (focus overlay)', phase: 2 },
-  screenshot: { label: 'Screenshot + answer', phase: 3 }
+  screenshot: { label: 'Screenshot + answer', phase: 3 },
+  addScreenshot: { label: 'Add screenshot (answer later)', phase: 3 }
 }
 
 export function SettingsTab() {
@@ -45,9 +50,12 @@ export function SettingsTab() {
         <SttSection settings={settings} />
         <LlmSection settings={settings} />
         <DetectionSection settings={settings} />
+        <ScreenSection settings={settings} />
+        <CostSection settings={settings} />
         <OverlaySection settings={settings} />
         <HotkeysSection settings={settings} />
         <DebugSection />
+        <DataSection />
       </div>
     </div>
   )
@@ -108,7 +116,8 @@ function ApiKeysSection() {
       title="API keys"
       description="Encrypted with Windows DPAPI (Electron safeStorage). Keys never leave the main process except to call the provider."
     >
-      <ApiKeyRow provider="deepgram" label="Deepgram" hint="Speech-to-text" isSet={keys?.deepgram ?? false} />
+      <ApiKeyRow provider="deepgram" label="Deepgram" hint="Speech-to-text · console.deepgram.com" isSet={keys?.deepgram ?? false} />
+      <ApiKeyRow provider="assemblyai" label="AssemblyAI" hint="Speech-to-text · assemblyai.com/dashboard" isSet={keys?.assemblyai ?? false} />
       <ApiKeyRow provider="anthropic" label="Anthropic" hint="Paid · console.anthropic.com" isSet={keys?.anthropic ?? false} />
       <ApiKeyRow provider="openrouter" label="OpenRouter" hint="Free models · openrouter.ai/keys" isSet={keys?.openrouter ?? false} />
       <ApiKeyRow provider="groq" label="Groq" hint="Free tier · console.groq.com/keys" isSet={keys?.groq ?? false} />
@@ -235,10 +244,25 @@ function SttSection({ settings }: { settings: Settings }) {
   const update = useApp((s) => s.updateSettings)
   const stt = settings.stt
   return (
-    <Section title="Speech-to-text" description="Deepgram streaming. Changes apply to the next session.">
-      <Row label="Model">
-        <TextSetting value={stt.model} onCommit={(model) => void update({ stt: { model } })} />
+    <Section title="Speech-to-text" description="Streaming transcription for the interviewer, your mic and practice answers. Changes apply to the next session.">
+      <Row label="Provider" hint={stt.provider === 'assemblyai' ? 'Universal-Streaming: ~$0.15/hour' : 'Nova-3: ~$0.46/hour'}>
+        <select className={inputCls} value={stt.provider} onChange={(e) => void update({ stt: { provider: e.target.value as Settings['stt']['provider'] } })}>
+          {STT_PROVIDERS.map((p) => (
+            <option key={p} value={p}>
+              {STT_PROVIDER_LABELS[p]}
+            </option>
+          ))}
+        </select>
       </Row>
+      {stt.provider === 'assemblyai' ? (
+        <Row label="Model" hint="universal-streaming-english, universal-streaming-multilingual or universal-3-6-pro">
+          <TextSetting value={stt.assemblyaiModel} onCommit={(assemblyaiModel) => void update({ stt: { assemblyaiModel } })} />
+        </Row>
+      ) : (
+        <Row label="Model">
+          <TextSetting value={stt.model} onCommit={(model) => void update({ stt: { model } })} />
+        </Row>
+      )}
       <Row label="Language">
         <TextSetting value={stt.language} onCommit={(language) => void update({ stt: { language } })} />
       </Row>
@@ -296,6 +320,21 @@ function LlmSection({ settings }: { settings: Settings }) {
         </div>
       </div>
 
+      <Row label="Screenshots go to" hint="First provider for screenshot answers; the rest follow as backups">
+        <select
+          className={inputCls}
+          value={llm.visionProvider}
+          onChange={(e) => void update({ llm: { visionProvider: e.target.value as LlmProviderId | 'auto' } })}
+        >
+          <option value="auto">Same order as answers (main, then backups)</option>
+          {LLM_PROVIDERS.map((p) => (
+            <option key={p} value={p}>
+              {LLM_PROVIDER_LABELS[p]} first{keys && !keys[p] ? ' (no key)' : ''}
+            </option>
+          ))}
+        </select>
+      </Row>
+
       {[llm.provider, ...fallbacks].map((p, i) => (
         <ProviderModels key={p} provider={p} settings={settings} badge={i === 0 ? 'main' : `backup ${i}`} />
       ))}
@@ -303,14 +342,21 @@ function LlmSection({ settings }: { settings: Settings }) {
       <Row label="Max tokens">
         <NumberSetting value={llm.maxTokens} onCommit={(maxTokens) => void update({ llm: { maxTokens } })} />
       </Row>
-      <Row label="Max tokens (coding)">
+      <Row label="Max tokens (coding)" hint="Also system design and screenshots">
         <NumberSetting value={llm.maxTokensCoding} onCommit={(maxTokensCoding) => void update({ llm: { maxTokensCoding } })} />
+      </Row>
+      <Row label="Coding answers" hint="Shorter always gives just the optimal solution">
+        <select
+          className={inputCls}
+          value={llm.codingAnswer}
+          onChange={(e) => void update({ llm: { codingAnswer: e.target.value as 'stepwise' | 'direct' } })}
+        >
+          <option value="stepwise">Step by step: pseudocode → brute force → optimal</option>
+          <option value="direct">Optimal only: approach, complexity, code</option>
+        </select>
       </Row>
       <Row label="Preferred language" hint="For coding answers">
         <TextSetting value={settings.preferredLanguage} onCommit={(preferredLanguage) => void update({ preferredLanguage })} />
-      </Row>
-      <Row label="Session cost cap (USD)">
-        <NumberSetting value={settings.cost.sessionCapUsd} onCommit={(sessionCapUsd) => void update({ cost: { sessionCapUsd } })} />
       </Row>
     </Section>
   )
@@ -327,7 +373,7 @@ const MODEL_HINTS: Record<LlmProviderId, string> = {
 function ProviderModels({ provider, settings, badge }: { provider: LlmProviderId; settings: Settings; badge: string }) {
   const update = useApp((s) => s.updateSettings)
   const models = modelsFor(settings, provider)
-  const setModels = (patch: { answerModel?: string; fastModel?: string }) =>
+  const setModels = (patch: { answerModel?: string; fastModel?: string; visionModel?: string }) =>
     void update({ llm: provider === 'anthropic' ? patch : { [provider]: patch } })
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-line p-3">
@@ -341,11 +387,14 @@ function ProviderModels({ provider, settings, badge }: { provider: LlmProviderId
       <Row label="Fast models" hint="Classifier, summaries">
         <ModelListSetting value={models.fastModel} onCommit={(fastModel) => setModels({ fastModel })} />
       </Row>
+      <Row label="Screenshot models" hint="Must accept images; empty = skip this provider for screenshots">
+        <ModelListSetting value={models.visionModel} allowEmpty onCommit={(visionModel) => setModels({ visionModel })} />
+      </Row>
       {provider === 'openrouter' && (
         <div className="grid grid-cols-[200px_1fr] items-center gap-4">
           <span className="text-sm">
             Presets
-            <span className="block text-[11px] text-muted">Free: 20 req/min, 50/day without credits</span>
+            <span className="block text-[11px] text-muted">Free: 20 req/min, 50/day without credits · Paid: pay per token from credits</span>
           </span>
           <div className="flex gap-2">
             {Object.values(OPENROUTER_PRESETS).map((preset) => {
@@ -353,7 +402,7 @@ function ProviderModels({ provider, settings, badge }: { provider: LlmProviderId
               return (
                 <button
                   key={preset.label}
-                  onClick={() => setModels({ answerModel: preset.answerModel, fastModel: preset.fastModel })}
+                  onClick={() => setModels({ answerModel: preset.answerModel, fastModel: preset.fastModel, visionModel: preset.visionModel })}
                   className={`rounded-md border px-3 py-1.5 text-sm ${active ? 'border-accent text-fg' : 'border-line text-muted hover:text-fg'}`}
                 >
                   {preset.label}
@@ -383,7 +432,7 @@ function ProviderModels({ provider, settings, badge }: { provider: LlmProviderId
 }
 
 /** Model chain editor: one ID per line, saved comma-separated on blur. */
-function ModelListSetting({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+function ModelListSetting({ value, onCommit, allowEmpty }: { value: string; onCommit: (v: string) => void; allowEmpty?: boolean }) {
   const toLines = (v: string) => splitModels(v).join('\n')
   const [draft, setDraft] = useState(toLines(value))
   useEffect(() => setDraft(toLines(value)), [value])
@@ -398,12 +447,12 @@ function ModelListSetting({ value, onCommit }: { value: string; onCommit: (v: st
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
           const joined = splitModels(draft).join(', ')
-          if (joined && joined !== splitModels(value).join(', ')) onCommit(joined)
+          if ((joined || allowEmpty) && joined !== splitModels(value).join(', ')) onCommit(joined)
           else setDraft(toLines(value))
         }}
       />
       <span className="text-[11px] text-muted">
-        {count} model{count === 1 ? '' : 's'} · tried top to bottom (max {MAX_MODEL_CHAIN})
+        {count === 0 ? 'None' : `${count} model${count === 1 ? '' : 's'} · tried top to bottom (max ${MAX_MODEL_CHAIN})`}
       </span>
     </div>
   )
@@ -434,6 +483,87 @@ function DetectionSection({ settings }: { settings: Settings }) {
       <Row label="Debounce (ms)" hint="At most one answer per window">
         <NumberSetting value={d.debounceMs} onCommit={(debounceMs) => void update({ detection: { debounceMs } })} />
       </Row>
+    </Section>
+  )
+}
+
+function ScreenSection({ settings }: { settings: Settings }) {
+  const update = useApp((s) => s.updateSettings)
+  const [displays, setDisplays] = useState<DisplayInfo[]>([])
+  useEffect(() => {
+    void window.api.screen.displays().then(setDisplays)
+  }, [])
+  const sc = settings.screen
+  return (
+    <Section
+      title="Screen"
+      description="Ctrl+Shift+S captures the screen and answers with a screenshot model — right away, or with the question the interviewer is asking. For long questions, add up to 3 screenshots while scrolling (Ctrl+Alt+S or the overlay camera button), then Answer: they are sent together for one answer. The overlay hides itself for each capture."
+    >
+      <Row label="Display">
+        <select className={inputCls} value={sc.displayId ?? ''} onChange={(e) => void update({ screen: { displayId: e.target.value || null } })}>
+          <option value="">Primary display</option>
+          {displays.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.label}
+              {d.primary ? ' — primary' : ''}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Always include screenshot" hint="Every answer gets a fresh screenshot (coding rounds)">
+        <input
+          type="checkbox"
+          className="size-4 justify-self-start accent-accent"
+          checked={sc.alwaysInclude}
+          onChange={(e) => void update({ screen: { alwaysInclude: e.target.checked } })}
+        />
+      </Row>
+      <Row label="Screenshots per question" hint="For long, scrolled problems (1–10). Groq takes at most 3; more go to OpenRouter / Gemini">
+        <NumberSetting value={sc.maxScreenshots} onCommit={(maxScreenshots) => void update({ screen: { maxScreenshots } })} />
+      </Row>
+      <Row label="Max size (px)" hint="Long edge; smaller is faster and cheaper">
+        <NumberSetting value={sc.maxEdgePx} onCommit={(maxEdgePx) => void update({ screen: { maxEdgePx } })} />
+      </Row>
+      <Row label="Keep screenshots" hint="Save them with the session in History">
+        <input
+          type="checkbox"
+          className="size-4 justify-self-start accent-accent"
+          checked={settings.keepScreenshots}
+          onChange={(e) => void update({ keepScreenshots: e.target.checked })}
+        />
+      </Row>
+    </Section>
+  )
+}
+
+function CostSection({ settings }: { settings: Settings }) {
+  const update = useApp((s) => s.updateSettings)
+  const [error, setError] = useState<string | null>(null)
+  const open = async () => {
+    const res = await window.api.cost.openPricing()
+    setError(res.ok ? null : (res.error ?? 'Could not open the file.'))
+  }
+  return (
+    <Section
+      title="Cost"
+      description="Speech-to-text minutes and LLM tokens are priced from pricing.json (OpenRouter reports its own costs). Groq and Gemini free tiers count as $0."
+    >
+      <Row label="Session cost cap (USD)" hint="Warning at 80%; at 100% answers use the fast models. 0 = no cap">
+        <NumberSetting value={settings.cost.sessionCapUsd} onCommit={(sessionCapUsd) => void update({ cost: { sessionCapUsd } })} />
+      </Row>
+      {/* Not a <Row>: a <label> would forward clicks on its text to the button. */}
+      <div className="grid grid-cols-[200px_1fr] items-center gap-4">
+        <span className="text-sm">
+          Prices
+          <span className="block text-[11px] text-muted">Applies from the next session</span>
+        </span>
+        <div className="flex items-center gap-3">
+          <button onClick={() => void open()} className="rounded-md border border-line px-3 py-1.5 text-sm text-muted hover:text-fg">
+            Open pricing file
+          </button>
+          {error && <span className="text-[11px] text-bad">{error}</span>}
+        </div>
+      </div>
     </Section>
   )
 }
@@ -489,6 +619,11 @@ function OverlaySection({ settings }: { settings: Settings }) {
 
 function HotkeysSection({ settings }: { settings: Settings }) {
   const update = useApp((s) => s.updateSettings)
+  const [failed, setFailed] = useState<HotkeyAction[]>([])
+  useEffect(() => {
+    void window.api.settings.hotkeyFailures().then(setFailed)
+    return window.api.settings.onHotkeyFailures(setFailed)
+  }, [])
   return (
     <Section
       title="Global hotkeys"
@@ -496,7 +631,12 @@ function HotkeysSection({ settings }: { settings: Settings }) {
     >
       {(Object.keys(HOTKEY_LABELS) as HotkeyAction[]).map((action) => (
         <Row key={action} label={HOTKEY_LABELS[action].label} hint={HOTKEY_LABELS[action].phase > CURRENT_PHASE ? `Phase ${HOTKEY_LABELS[action].phase}` : undefined}>
-          <TextSetting value={settings.hotkeys[action]} onCommit={(v) => void update({ hotkeys: { [action]: v } })} />
+          <div className="flex flex-col gap-1">
+            <TextSetting value={settings.hotkeys[action]} onCommit={(v) => void update({ hotkeys: { [action]: v } })} />
+            {failed.includes(action) && (
+              <span className="text-[11px] text-bad">Another app is using this shortcut, so it doesn't work — pick a different one.</span>
+            )}
+          </div>
         </Row>
       ))}
     </Section>
@@ -556,5 +696,25 @@ function LatencyRow({ label, hint, samples }: { label: string; hint: string; sam
         </div>
       )}
     </div>
+  )
+}
+
+/** FR-D5: remove everything the app stored on this PC. */
+function DataSection() {
+  const [dir, setDir] = useState('')
+  useEffect(() => {
+    void window.api.app.info().then((i) => setDir(i.dataDir))
+  }, [])
+  return (
+    <Section title="Data" description={`Everything is stored on this PC${dir ? ` in ${dir}` : ''}.`}>
+      <Row label="Delete all data" hint="History, practice runs, screenshots, profile, settings, API keys and logs; the app restarts">
+        <button
+          onClick={() => void window.api.app.deleteAllData()}
+          className="justify-self-start rounded-md border border-bad/40 px-3 py-1.5 text-sm text-bad hover:bg-bad/10"
+        >
+          Delete all data…
+        </button>
+      </Row>
+    </Section>
   )
 }

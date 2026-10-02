@@ -1,8 +1,8 @@
 {
-  "name": "interview-copilot",
-  "productName": "InterviewCopilot",
-  "version": "0.1.0",
-  "description": "Personal real-time interview assistant for Windows",
+  "name": "cue",
+  "productName": "Cue",
+  "version": "1.0.0",
+  "description": "Personal real-time call assistant for Windows (Work and Interview modes)",
   "author": "Omkar",
   "private": true,
   "main": "./out/main/index.js",
@@ -15,13 +15,16 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dist": "npm run build && electron-builder --win nsis --x64"
+    "dist": "npm run build && electron-builder --win nsis --x64",
+    "icon": "node scripts/make-icon.mjs",
+    "mock-teams": "node scripts/mock-teams.mjs"
   },
   "build": {
-    "appId": "com.omkar.interviewcopilot",
-    "productName": "InterviewCopilot",
+    "appId": "com.omkar.cue",
+    "productName": "Cue",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "out/**/*",
@@ -41,11 +44,18 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Cue",
+      "uninstallDisplayName": "Cue",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Cue-Setup-${version}.exe"
     }
   },
   "dependencies": {

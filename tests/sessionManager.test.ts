@@ -21,7 +21,7 @@ class MockStt extends BaseSttProvider {
   }
 }
 
-function setup(opts: { apiKey?: string | null; settings?: Settings } = {}) {
+function setup(opts: { apiKey?: string | null; settings?: Settings; onAudioSent?: (source: AudioSource, seconds: number) => void; getCost?: () => number } = {}) {
   const providers = new Map<AudioSource, MockStt>()
   const captureStart = vi.fn()
   const captureStop = vi.fn()
@@ -37,6 +37,8 @@ function setup(opts: { apiKey?: string | null; settings?: Settings } = {}) {
     startCapture: captureStart,
     stopCapture: captureStop,
     setMic,
+    onAudioSent: opts.onAudioSent,
+    getCost: opts.getCost,
     now: () => Date.now()
   })
   const states: SessionState[] = []
@@ -64,7 +66,7 @@ describe('SessionManager', () => {
     expect(mgr.start()).toEqual({ ok: true })
     expect([...providers.keys()]).toEqual(['loopback'])
     expect(providers.get('loopback')!.started).toBe(true)
-    expect(captureStart).toHaveBeenCalledWith({ mic: false, micDeviceId: null })
+    expect(captureStart).toHaveBeenCalledWith({ loopback: true, mic: false, micDeviceId: null })
     expect(mgr.getState().status).toBe('listening')
   })
 
@@ -73,7 +75,7 @@ describe('SessionManager', () => {
     const { mgr, providers, captureStart } = setup({ settings })
     mgr.start()
     expect([...providers.keys()].sort()).toEqual(['loopback', 'mic'])
-    expect(captureStart).toHaveBeenCalledWith({ mic: true, micDeviceId: 'abc' })
+    expect(captureStart).toHaveBeenCalledWith({ loopback: true, mic: true, micDeviceId: 'abc' })
   })
 
   it('routes audio chunks to the matching provider', () => {
@@ -84,6 +86,16 @@ describe('SessionManager', () => {
     const got = providers.get('loopback')!.received
     expect(got).toHaveLength(1)
     expect([...got[0]]).toEqual([1, 2, 3, 4])
+  })
+
+  it('meters seconds of audio streamed per lane and reports the running cost', () => {
+    const sent: [AudioSource, number][] = []
+    const { mgr } = setup({ onAudioSent: (source, seconds) => sent.push([source, seconds]), getCost: () => 0.12 })
+    mgr.start()
+    mgr.handleAudioChunk({ source: 'loopback', pcm: new ArrayBuffer(3200), ts: 0 })
+    mgr.handleAudioChunk({ source: 'mic', pcm: new ArrayBuffer(3200), ts: 0 })
+    expect(sent).toEqual([['loopback', 0.1]])
+    expect(mgr.getState().cost).toBe(0.12)
   })
 
   it('turns provider events into transcript updates and utterance ends', () => {
@@ -210,5 +222,53 @@ describe('SessionManager', () => {
       await mgr.stop()
       expect(mgr.getState().voiceAsk).toBe(false)
     })
+  })
+
+  it('practice: a mic-only session reaches listening on the mic lane, with no system-audio hint', () => {
+    const providers = new Map<AudioSource, MockStt>()
+    const captureStart = vi.fn()
+    const mgr = new SessionManager({
+      getSettings: () => DEFAULT_SETTINGS,
+      getSttApiKey: () => 'key',
+      sources: () => ['mic'],
+      createStt: (source) => {
+        const p = new MockStt()
+        providers.set(source, p)
+        return p
+      },
+      startCapture: captureStart,
+      stopCapture: vi.fn(),
+      setMic: vi.fn()
+    })
+    expect(mgr.start()).toEqual({ ok: true })
+    expect([...providers.keys()]).toEqual(['mic'])
+    expect(captureStart).toHaveBeenCalledWith({ loopback: false, mic: true, micDeviceId: null })
+    expect(mgr.getState().status).toBe('listening')
+    // A mic capture failure ends a mic-only session.
+    mgr.handleCaptureStatus({ source: 'mic', state: 'error', message: 'device lost' })
+    return vi.waitFor(() => expect(mgr.getState()).toMatchObject({ status: 'error', message: 'Microphone capture failed: device lost' }))
+  })
+
+  it('tells the user once the speech service has dropped 3 times in a row', () => {
+    const { mgr, providers } = setup()
+    const notices: string[] = []
+    mgr.on('notice', (m) => notices.push(m))
+    mgr.start()
+    const stt = providers.get('loopback')!
+    stt.emit('state', 'reconnecting')
+    stt.emit('state', 'reconnecting')
+    expect(notices).toEqual([])
+    stt.emit('state', 'reconnecting')
+    stt.emit('state', 'reconnecting')
+    expect(notices).toEqual([expect.stringContaining('keeps disconnecting')])
+    stt.emit('state', 'open')
+    expect(notices[1]).toBe('Speech-to-text reconnected.')
+    expect(mgr.getState().status).toBe('listening')
+  })
+
+  it('names the selected STT provider when its key is missing', () => {
+    const settings = mergeSettings(DEFAULT_SETTINGS, { stt: { provider: 'assemblyai' } })
+    const { mgr } = setup({ apiKey: null, settings })
+    expect(mgr.start()).toMatchObject({ ok: false, error: expect.stringContaining('AssemblyAI') })
   })
 })

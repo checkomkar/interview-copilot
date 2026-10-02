@@ -45,6 +45,9 @@ export function cooldownMs(kind: string, retryAfterMs?: number, status?: number)
       return HOUR
     case 'auth':
       return 10 * MINUTE
+    case 'empty':
+      // Likely to burn the whole budget thinking again on similar requests.
+      return 10 * MINUTE
     default:
       // Model not found / blocked by data policy: unlikely to change soon.
       return status === 404 ? 10 * MINUTE : 0

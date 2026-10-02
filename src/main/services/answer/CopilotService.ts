@@ -11,19 +11,24 @@ import type {
   QaSnapshot,
   QuestionDetected,
   QuestionType,
+  ScreenshotPending,
   TranscriptUpdate
 } from '@shared/ipc'
-import type { Settings } from '@shared/settings'
+import type { AppMode, Settings } from '@shared/settings'
 import { createLogger } from '../../logger'
-import { guessType, looksIncomplete, wordCount, type QuestionDetector } from '../detect/QuestionDetector'
+import { guessType, looksIncomplete, wordCount, type Detection } from '../detect/QuestionDetector'
 import { LlmError } from '../llm/LlmProvider'
-import type { TranscriptLine } from '../llm/prompts'
+import { SCREEN_QUESTION, type TranscriptLine } from '../llm/prompts'
+import type { Screenshot } from '../screen/ScreenService'
+import { WORK_SCREEN_QUESTION } from '../work/workPrompts'
 import { PartialAnswerError, type AnswerService } from './AnswerService'
 
 const log = createLogger('copilot')
 
 const MAX_TRANSCRIPT_LINES = 300
 const MAX_QAS = 100
+/** Earlier Q&As sent with each answer so follow-ups ("what did you understand from this question?") have context. */
+const EARLIER_QAS = 3
 /** Interviewer utterances kept as "since the last answer" (FR-Q1). */
 const MAX_PENDING = 4
 /** FR-Q4: a short question this soon after the previous one is a follow-up. */
@@ -39,13 +44,44 @@ const RESUME_MS = 3000
 const KEEP_WARM_CHECK_MS = 60_000
 const KEEP_WARM_IDLE_MS = 270_000
 
+/** A detection; Work Mode's also says which project a status question is about (FR-W9). */
+export type CopilotDetection = Detection & { projectId?: string; taskId?: string; suggestedId?: string | null }
+
+/** How a typed or voice question is handled in Work Mode (FR-W6): a status answer, the quick-pick, or a general answer. */
+export interface DirectQuestion {
+  type: QuestionType
+  projectId?: string
+  taskId?: string
+  suggestedId?: string | null
+}
+
 export interface CopilotDeps {
-  detector: Pick<QuestionDetector, 'detect'>
+  /** Interview: question detection (FR-Q2/Q3). Work: status-question detection (FR-W8). */
+  detector: { detect: (utterances: string[], context: string[]) => Promise<CopilotDetection> }
   answers: Pick<AnswerService, 'generate' | 'prewarm'>
   getSettings: () => Settings
   /** Voice questions on: the user's mic speech is answered directly. */
   isVoiceAsk?: () => boolean
+  /** Screen capture (FR-SC1). `manual`: the user pressed the hotkey (vs. "always include"). */
+  captureScreen?: (opts: { manual: boolean }) => Promise<Screenshot>
+  /** Default: interview. */
+  getMode?: () => AppMode
+  /** A project's name for display (Work Mode status answers), with the item's when there is one. */
+  projectName?: (id: string, taskId?: string) => string | null
+  /** Work Mode: what a typed or voice question is about (FR-W6). Default: a general work question. */
+  resolveQuestion?: (text: string) => DirectQuestion
+  /**
+   * Work Mode: `text` names a different project or item than `prev` was about, so it starts a new
+   * question instead of continuing or following up on `prev` (FR-W10).
+   */
+  differentTopic?: (prev: QaSnapshot, text: string) => boolean
   now?: () => number
+}
+
+/** Work Mode: a status update was asked for, but which project isn't certain — the user picks (FR-W6/W9). */
+export interface StatusPickRequest {
+  question: string
+  suggestedId: string | null
 }
 
 export interface CopilotEvents {
@@ -56,6 +92,11 @@ export interface CopilotEvents {
   /** New session: renderers drop their Q&A history. */
   reset: []
   latency: [LatencySample]
+  /** The screenshots waiting for the next answer changed. */
+  screenshot: [ScreenshotPending]
+  /** A Q&A finished (done, failed or interrupted), with the screenshots sent with it (base64 JPEGs). */
+  settled: [QaSnapshot, { screenshots?: string[] }]
+  pick: [StatusPickRequest]
 }
 
 interface PendingUtterance {
@@ -93,6 +134,10 @@ export class CopilotService extends EventEmitter {
   private lastQuestionEndedAt = Number.NEGATIVE_INFINITY
   /** Per lane: when the utterance being spoken now started. */
   private speechStartedAt = new Map<AudioSource, number>()
+  /** Screenshots waiting to be sent with the next answer, oldest first (FR-SC2). */
+  private attached: Screenshot[] = []
+  /** Screenshots each Q&A was asked with, so regenerating keeps them. */
+  private shots = new Map<string, Screenshot[]>()
   private readonly now: () => number
 
   constructor(private readonly deps: CopilotDeps) {
@@ -105,6 +150,11 @@ export class CopilotService extends EventEmitter {
   }
   override on<E extends keyof CopilotEvents>(event: E, listener: (...args: CopilotEvents[E]) => void): this {
     return super.on(event, listener as (...a: unknown[]) => void)
+  }
+
+  /** An answer is being generated. */
+  isBusy(): boolean {
+    return this.current !== null
   }
 
   list(): QaSnapshot[] {
@@ -126,6 +176,8 @@ export class CopilotService extends EventEmitter {
       this.current?.controller.abort()
       this.current = null
       this.qas = []
+      this.shots.clear()
+      this.setAttached([])
       this.lastGenAt = Number.NEGATIVE_INFINITY
       this.lastQuestionAt = Number.NEGATIVE_INFINITY
       this.emit('reset')
@@ -204,7 +256,15 @@ export class CopilotService extends EventEmitter {
     const turn = this.voicePending
     this.voicePending = []
     const text = turn.map((p) => p.text).join(' ').trim()
-    if (text) this.onQuestion(text, guessType(text), turn[turn.length - 1].endedAt, { voice: true, startedAt: turn[0].startedAt })
+    if (!text) return
+    const d = this.direct(text)
+    this.onQuestion(text, d.type, turn[turn.length - 1].endedAt, {
+      voice: true,
+      startedAt: turn[0].startedAt,
+      projectId: d.projectId,
+      taskId: d.taskId,
+      suggestedId: d.suggestedId
+    })
   }
 
   /** Speech that started at `startedAt` carries on the last question rather than asking a new one. */
@@ -221,10 +281,16 @@ export class CopilotService extends EventEmitter {
     }
   }
 
-  /** Force an answer to what the interviewer said last (FR-U4). */
+  /**
+   * Force an answer to what the interviewer said last (U10). In Work Mode this opens the status
+   * quick-pick instead (FR-W6), with what was said last as the question.
+   */
   answerNow(): AnswerActionResult {
-    const lastHeard = [...this.transcript].reverse().find((l) => l.source === 'loopback')?.text ?? ''
-    const text = this.pending.map((p) => p.text).join(' ').trim() || this.livePartial.trim() || lastHeard
+    const text = this.lastHeard()
+    if (this.mode() === 'work') {
+      this.emit('pick', { question: text, suggestedId: null })
+      return { ok: true }
+    }
     if (!text) return { ok: false, error: 'Nothing heard yet to answer.' }
     this.cancelGrace('loopback')
     this.pending = []
@@ -236,16 +302,113 @@ export class CopilotService extends EventEmitter {
     return { ok: true }
   }
 
+  /** What the other side said last: speech not yet answered, else what's being said, else the last line heard. */
+  lastHeard(): string {
+    const last = [...this.transcript].reverse().find((l) => l.source === 'loopback')?.text ?? ''
+    return this.pending.map((p) => p.text).join(' ').trim() || this.livePartial.trim() || last
+  }
+
   /** A question the user typed or spoke to the assistant: answered as-is, no detection or debounce. */
   ask(text: string): AnswerActionResult {
     const question = text.trim()
     if (!question) return { ok: false, error: 'Type a question first.' }
-    const qa = this.newQa(question, guessType(question))
+    const d = this.direct(question)
+    // A status question about an unclear project: ask which one rather than guess (FR-W9).
+    if (d.type === 'status' && !d.projectId) {
+      this.emit('pick', { question, suggestedId: d.suggestedId ?? null })
+      return { ok: true }
+    }
+    const qa = this.newQa(question, d.type, d.projectId, d.taskId)
     this.lastQuestionAt = this.now()
     this.lastQuestionIncomplete = false
     this.lastQuestionEndedAt = Number.NEGATIVE_INFINITY
     this.schedule(qa, 'auto', this.now(), true)
     return { ok: true }
+  }
+
+  /** A spoken-ready status update on one project (FR-W6): picked in the overlay, or typed as "status <project>". */
+  askStatus(projectId: string, question?: string, taskId?: string): AnswerActionResult {
+    const name = this.deps.projectName?.(projectId, taskId)
+    if (!name) return { ok: false, error: 'That project no longer exists.' }
+    this.cancelGrace('loopback')
+    this.pending = []
+    const qa = this.newQa(question?.trim() || `What's the status of ${name}?`, 'status', projectId, taskId)
+    this.lastQuestionAt = this.now()
+    this.lastQuestionIncomplete = false
+    this.lastQuestionEndedAt = Number.NEGATIVE_INFINITY
+    this.schedule(qa, 'auto', this.now(), true)
+    return { ok: true }
+  }
+
+  /**
+   * Screenshot hotkey (FR-SC2): captures one more screenshot (unless the tray is full), then
+   * while the interviewer is mid-question the screenshots wait for that answer; otherwise they
+   * are answered right away ("Solve / answer what's shown on screen").
+   */
+  async captureScreen(): Promise<AnswerActionResult> {
+    if (this.attached.length < this.maxShots()) {
+      const added = await this.addScreenshot()
+      if (!added.ok) return added
+    }
+    if (this.questionUnderway()) return { ok: true }
+    return this.ask(this.screenQuestion())
+  }
+
+  /**
+   * Add a screenshot to the next answer without answering yet, so a long question can be
+   * captured in parts while scrolling (FR-SC6). Up to `screen.maxScreenshots`.
+   */
+  async addScreenshot(): Promise<AnswerActionResult> {
+    if (!this.deps.captureScreen) return { ok: false, error: 'Screen capture is unavailable.' }
+    const max = this.maxShots()
+    if (this.attached.length >= max) {
+      return { ok: false, error: `Up to ${max} screenshots per question (Settings → Screen) — remove one or answer first.` }
+    }
+    let shot: Screenshot
+    try {
+      shot = await this.deps.captureScreen({ manual: true })
+    } catch (err) {
+      log.warn('screenshot failed', err)
+      return { ok: false, error: `Screenshot failed: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    this.setAttached([...this.attached, shot].slice(-max))
+    return { ok: true }
+  }
+
+  /** Answer from the waiting screenshots alone (the tray's Answer button). */
+  answerScreenshots(): AnswerActionResult {
+    if (this.attached.length === 0) return { ok: false, error: 'Add a screenshot first.' }
+    return this.ask(this.screenQuestion())
+  }
+
+  /** Remove one waiting screenshot (the × on its thumbnail), or all of them. */
+  clearScreenshot(index?: number): void {
+    this.setAttached(index === undefined ? [] : this.attached.filter((_, i) => i !== index))
+  }
+
+  pendingScreenshot(): ScreenshotPending {
+    return { thumbs: this.attached.map((s) => s.thumb), max: this.maxShots() }
+  }
+
+  private maxShots(): number {
+    return this.deps.getSettings().screen.maxScreenshots
+  }
+
+  /** The interviewer is speaking, or what they said is about to be answered. */
+  private questionUnderway(): boolean {
+    return (
+      this.livePartial.trim().length > 0 ||
+      this.speechStartedAt.has('loopback') ||
+      this.grace.has('loopback') ||
+      this.detecting ||
+      this.scheduled !== null
+    )
+  }
+
+  private setAttached(shots: Screenshot[]): void {
+    if (shots.length === 0 && this.attached.length === 0) return
+    this.attached = shots
+    this.emit('screenshot', this.pendingScreenshot())
   }
 
   regenerate(): AnswerActionResult {
@@ -280,9 +443,9 @@ export class CopilotService extends EventEmitter {
         // The rest of a question cut off by a pause ("…how the virtual" + "DOM works.") isn't a
         // question by itself; it continues the last one, so skip detection.
         const prev = this.qas.at(-1)
-        if (prev && this.continuesLastQuestion(batch[0].startedAt)) {
+        if (prev && this.continuesLastQuestion(batch[0].startedAt) && !this.deps.differentTopic?.(prev, raw)) {
           this.pending = []
-          this.onQuestion(raw, prev.type, endedAt, { raw, startedAt: batch[0].startedAt })
+          this.onQuestion(raw, prev.type, endedAt, { raw, startedAt: batch[0].startedAt, projectId: prev.projectId, taskId: prev.taskId })
           continue
         }
         const context = this.transcript
@@ -300,7 +463,13 @@ export class CopilotService extends EventEmitter {
         if (!d.isQuestion) return
         this.pending = []
         // Judge "unfinished" on what was said, not on the classifier's cleaned-up rewrite.
-        this.onQuestion(d.question, d.type, endedAt, { raw, startedAt: batch[0].startedAt })
+        this.onQuestion(d.question, d.type, endedAt, {
+          raw,
+          startedAt: batch[0].startedAt,
+          projectId: d.projectId,
+          taskId: d.taskId,
+          suggestedId: d.suggestedId
+        })
       } while (this.dirty)
     } catch (err) {
       log.warn('question detection failed', err)
@@ -319,10 +488,11 @@ export class CopilotService extends EventEmitter {
     question: string,
     type: QuestionType,
     endedAt: number,
-    opts: { raw?: string; voice?: boolean; startedAt?: number } = {}
+    opts: { raw?: string; voice?: boolean; startedAt?: number; projectId?: string; taskId?: string; suggestedId?: string | null } = {}
   ): void {
     const now = this.now()
-    const prev = this.qas.at(-1)
+    // About another project or item (Work Mode): a new question, however soon it follows (FR-W10).
+    const prev = this.qas.at(-1) && !this.deps.differentTopic?.(this.qas.at(-1)!, opts.raw ?? question) ? this.qas.at(-1) : undefined
     const recent = prev !== undefined && now - this.lastQuestionAt < FOLLOW_UP_MS
     const continues = prev !== undefined && this.continuesLastQuestion(opts.startedAt ?? endedAt)
     const followUp = recent && !opts.voice && wordCount(question) < FOLLOW_UP_MAX_WORDS
@@ -334,7 +504,12 @@ export class CopilotService extends EventEmitter {
       this.schedule(prev, prev.style, endedAt, opts.voice)
       return
     }
-    this.schedule(this.newQa(question, type), 'auto', endedAt, opts.voice)
+    // A status question about an unknown project: ask which one rather than guess (FR-W9).
+    if (type === 'status' && !opts.projectId) {
+      this.emit('pick', { question, suggestedId: opts.suggestedId ?? null })
+      return
+    }
+    this.schedule(this.newQa(question, type, opts.projectId, opts.taskId), 'auto', endedAt, opts.voice)
   }
 
   /** FR-Q5: at most one generation per debounce window; the latest request wins. */
@@ -361,18 +536,44 @@ export class CopilotService extends EventEmitter {
         const message = 'Interrupted by the next question.'
         Object.assign(prev.qa, { status: 'error', error: message })
         this.emit('error', { id: prev.qa.id, message, partial: prev.qa.answer.length > 0 })
+        this.settle(prev.qa)
       }
     }
     const controller = new AbortController()
     this.current = { qa, controller }
     this.lastGenAt = this.now()
 
-    Object.assign(qa, { answer: '', status: 'thinking', style, error: undefined, truncated: undefined, servedBy: undefined })
+    // The Q&A's own screenshots (regenerate), else the ones waiting, else a fresh one if "always include" is on.
+    let shots = this.shots.get(qa.id) ?? []
+    if (shots.length === 0 && this.attached.length > 0) {
+      shots = this.attached
+      this.setAttached([])
+    }
+    if (shots.length === 0 && this.deps.captureScreen && this.deps.getSettings().screen.alwaysInclude) {
+      try {
+        shots = [await this.deps.captureScreen({ manual: false })]
+      } catch (err) {
+        log.warn('automatic screenshot failed; answering without it', err)
+      }
+      if (controller.signal.aborted) return
+    }
+    if (shots.length) this.shots.set(qa.id, shots)
+    const thumbs = shots.length ? shots.map((s) => s.thumb) : undefined
+
+    Object.assign(qa, { answer: '', status: 'thinking', style, error: undefined, truncated: undefined, servedBy: undefined, screenshots: thumbs })
     if (!this.qas.includes(qa)) {
       this.qas.push(qa)
-      if (this.qas.length > MAX_QAS) this.qas.shift()
+      if (this.qas.length > MAX_QAS) this.shots.delete(this.qas.shift()!.id)
     }
-    this.emit('question', { id: qa.id, question: qa.question, type: qa.type, style, ts: this.now() })
+    this.emit('question', {
+      id: qa.id,
+      question: qa.question,
+      type: qa.type,
+      style,
+      ts: this.now(),
+      ...(thumbs ? { screenshots: thumbs } : {}),
+      ...(qa.project ? { project: qa.project } : {})
+    })
 
     let first = true
     try {
@@ -380,7 +581,11 @@ export class CopilotService extends EventEmitter {
         question: qa.question,
         type: qa.type,
         style,
+        ...(qa.projectId ? { projectId: qa.projectId } : {}),
+        ...(qa.taskId ? { taskId: qa.taskId } : {}),
         transcript: this.transcript.slice(),
+        earlier: this.earlierThan(qa),
+        ...(shots.length ? { images: shots.map((s) => ({ type: 'image' as const, mediaType: s.mediaType, data: s.data })) } : {}),
         signal: controller.signal,
         onText: (delta) => {
           if (controller.signal.aborted) return
@@ -399,6 +604,7 @@ export class CopilotService extends EventEmitter {
       qa.truncated = result.truncated
       qa.servedBy = servedBy(result.usage)
       this.emit('done', { id: qa.id, usage: result.usage, truncated: result.truncated })
+      this.settle(qa)
       log.info(
         `answer ${qa.id} ${qa.type}/${style}: ${result.usage.service ? `[${result.usage.service}] ` : ''}${result.usage.model}${result.usage.provider ? ` via ${result.usage.provider}` : ''} in=${result.usage.inputTokens} cached=${result.usage.cacheReadTokens} out=${result.usage.outputTokens}`
       )
@@ -411,6 +617,7 @@ export class CopilotService extends EventEmitter {
       qa.status = 'error'
       qa.error = message
       this.emit('error', { id: qa.id, message, partial })
+      this.settle(qa)
     } finally {
       if (this.current?.controller === controller) this.current = null
     }
@@ -426,8 +633,48 @@ export class CopilotService extends EventEmitter {
     }
   }
 
-  private newQa(question: string, type: QuestionType): QaSnapshot {
-    return { id: `qa-${this.now()}-${++this.seq}`, question, type, style: 'auto', answer: '', status: 'thinking' }
+  /** The answered Q&As before `qa` (oldest first), for follow-up context. Typed questions aren't in the transcript. */
+  private earlierThan(qa: QaSnapshot): { question: string; answer: string }[] {
+    const i = this.qas.indexOf(qa)
+    return (i === -1 ? this.qas : this.qas.slice(0, i))
+      .filter((q) => q.answer.trim())
+      .slice(-EARLIER_QAS)
+      .map((q) => ({ question: q.question, answer: q.answer }))
+  }
+
+  private settle(qa: QaSnapshot): void {
+    const shots = this.shots.get(qa.id)
+    this.emit('settled', { ...qa }, shots ? { screenshots: shots.map((s) => s.data) } : {})
+  }
+
+  private newQa(question: string, type: QuestionType, projectId?: string, taskId?: string): QaSnapshot {
+    const project = projectId ? (this.deps.projectName?.(projectId, taskId) ?? undefined) : undefined
+    return {
+      id: `qa-${this.now()}-${++this.seq}`,
+      question,
+      type,
+      style: 'auto',
+      answer: '',
+      status: 'thinking',
+      ...(projectId ? { projectId, project, ...(taskId ? { taskId } : {}) } : {})
+    }
+  }
+
+  private mode(): AppMode {
+    return this.deps.getMode?.() ?? 'interview'
+  }
+
+  /**
+   * Typed and voice questions: Work Mode checks them for a status question about a known project or
+   * item (FR-W6), else answers them from project context; Interview Mode guesses the interview type.
+   */
+  private direct(text: string): DirectQuestion {
+    if (this.mode() !== 'work') return { type: guessType(text) }
+    return this.deps.resolveQuestion?.(text) ?? { type: 'work' }
+  }
+
+  private screenQuestion(): string {
+    return this.mode() === 'work' ? WORK_SCREEN_QUESTION : SCREEN_QUESTION
   }
 
   private cancelScheduled(): void {

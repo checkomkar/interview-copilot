@@ -6,10 +6,11 @@ import { DEFAULT_SETTINGS, activeModels } from '@shared/settings'
 import { extractDocumentText, normalize } from '../src/main/services/profile/documentText'
 import { ProfileService } from '../src/main/services/profile/ProfileService'
 import { MockLlm } from './mockLlm'
+import { messageText } from '../src/main/services/llm/LlmProvider'
 
 function setup(dir: string | null = null) {
   const llm = new MockLlm()
-  llm.completeText = (req) => (req.messages[0].content.includes('<resume>') ? 'RESUME SUMMARY' : 'JD SUMMARY')
+  llm.completeText = (req) => (messageText(req.messages[0]).includes('<resume>') ? 'RESUME SUMMARY' : 'JD SUMMARY')
   const svc = new ProfileService({ dir, provider: llm, getSettings: () => DEFAULT_SETTINGS })
   return { svc, llm }
 }

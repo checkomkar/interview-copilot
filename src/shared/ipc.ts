@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { API_KEY_PROVIDERS } from './settings'
+import { API_KEY_PROVIDERS, MAX_SCREENSHOTS } from './settings'
 
 export { IPC } from './channels'
 
@@ -31,6 +31,8 @@ export const CaptureStatusSchema = z.object({
 export type CaptureStatus = z.infer<typeof CaptureStatusSchema>
 
 export interface CaptureStartPayload {
+  /** System audio; off for Practice Mode (mic only). */
+  loopback: boolean
   mic: boolean
   micDeviceId: string | null
 }
@@ -59,7 +61,7 @@ export interface SessionState {
   status: SessionStatus
   /** Elapsed session time in ms. */
   elapsed: number
-  /** Running session cost in USD (populated from Phase 3). */
+  /** Running session cost in USD (see CostUpdate for details). */
   cost: number
   message?: string
   /** Shown when the loopback stream has been silent too long. */
@@ -82,7 +84,8 @@ export interface LatencySample {
   ts: number
 }
 
-export const QUESTION_TYPES = ['behavioral', 'technical', 'coding', 'system_design', 'situational', 'smalltalk', 'other'] as const
+/** Interview types, then Work Mode's: `status` (a project status update) and `work` (any other question, or explaining the screen). */
+export const QUESTION_TYPES = ['behavioral', 'technical', 'coding', 'system_design', 'situational', 'smalltalk', 'other', 'status', 'work'] as const
 export const QuestionTypeSchema = z.enum(QUESTION_TYPES)
 export type QuestionType = z.infer<typeof QuestionTypeSchema>
 
@@ -96,6 +99,10 @@ export interface QuestionDetected {
   type: QuestionType
   style: AnswerStyle
   ts: number
+  /** Thumbnails (data URLs) of the screenshots sent with this question, in order. */
+  screenshots?: string[]
+  /** Work Mode status update: the project's name. */
+  project?: string
 }
 
 export interface AnswerToken {
@@ -113,6 +120,8 @@ export interface AnswerUsage {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  /** Cost the API reported for this request (OpenRouter), in USD. Otherwise priced from pricing.json. */
+  costUsd?: number
 }
 
 /** "gpt-oss-120b · Groq": the model without its vendor prefix, and the service that answered. */
@@ -149,6 +158,46 @@ export interface QaSnapshot {
   truncated?: boolean
   /** e.g. "gpt-oss-120b · Groq", shown under the answer. */
   servedBy?: string
+  /** Thumbnails (data URLs) of the screenshots sent with the question, in order. */
+  screenshots?: string[]
+  /** Work Mode status update: which project, by id, and its name for display ("Mobile app · TOM approvals" for an item). */
+  projectId?: string
+  project?: string
+  /** Work Mode: the item asked about (FR-W7a). */
+  taskId?: string
+}
+
+/** Screenshots waiting to be sent with the next answer (FR-SC2/SC5), oldest first. */
+export interface ScreenshotPending {
+  thumbs: string[]
+  /** How many can be attached to one question (Settings → Screen). */
+  max: number
+}
+
+/** Remove one waiting screenshot (by position), or all of them. */
+export const ScreenClearSchema = z.object({ index: z.number().int().min(0).max(MAX_SCREENSHOTS - 1).optional() }).optional()
+
+export interface DisplayInfo {
+  id: string
+  label: string
+  primary: boolean
+}
+
+export type CostStatus = 'ok' | 'warn' | 'capped'
+
+/** Running cost of the current history session (FR-C1..C4). */
+export interface CostUpdate {
+  usd: number
+  /** 0 = no cap. */
+  capUsd: number
+  /** `warn` at 80% of the cap; `capped` at 100% (answers use the fast models). */
+  status: CostStatus
+  sttSeconds: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  /** Models used this session with no price in pricing.json (counted as $0). */
+  unpriced: string[]
 }
 
 export type OverlayNav = 'prev' | 'next'
@@ -167,6 +216,6 @@ export const ApiKeySetSchema = z.object({
   key: z.string().max(500)
 })
 
-export type NavigateTarget = 'session' | 'profile' | 'history' | 'practice' | 'settings'
+export type NavigateTarget = 'session' | 'profile' | 'projects' | 'history' | 'practice' | 'settings'
 
 export type SessionStartResult = { ok: true } | { ok: false; error: string; navigate?: NavigateTarget }

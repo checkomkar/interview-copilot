@@ -1,0 +1,48 @@
+{
+  "_readme": [
+    "Prices in USD used for the cost meter. Edit the copy in %APPDATA%/Cue/pricing.json (Settings → Cost → Open pricing file); it replaces this file entirely.",
+    "llm: per 1M tokens, keyed by provider, then by the model ID the API reports. '*' matches any characters; the most specific match wins. Keys starting with '_' are ignored.",
+    "OpenRouter reports each request's cost itself; those figures are used instead of this table.",
+    "Groq and Gemini are priced at $0 because their free tiers cost nothing. On a paid plan, replace '*' with your plan's prices (Gemini's paid list prices are kept under '_paid').",
+    "stt: per minute of audio streamed (each lane — interviewer and mic — is billed separately). AssemblyAI bills the time the connection is open; audio streams continuously, so it is the same.",
+    "Prices as of 2026-10; check the providers' pricing pages."
+  ],
+  "stt": {
+    "deepgram": {
+      "*": { "perMinute": 0.0077 }
+    },
+    "assemblyai": {
+      "universal-3*": { "perMinute": 0.0075 },
+      "*": { "perMinute": 0.0025 }
+    }
+  },
+  "llm": {
+    "anthropic": {
+      "claude-sonnet-5-5*": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+      "claude-sonnet-5*": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+      "claude-haiku-4-5*": { "input": 1, "output": 5, "cacheRead": 0.1, "cacheWrite": 1.25 },
+      "claude-opus-5-5*": { "input": 4, "output": 20, "cacheRead": 0.4, "cacheWrite": 5 },
+      "claude-opus-5*": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
+      "claude-fable-5*": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 }
+    },
+    "openrouter": {
+      "*:free": { "input": 0, "output": 0 },
+      "openrouter/free": { "input": 0, "output": 0 },
+      "anthropic/claude-sonnet-5.5": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+      "anthropic/claude-haiku-4.5": { "input": 1, "output": 5, "cacheRead": 0.1, "cacheWrite": 1.25 }
+    },
+    "groq": {
+      "*": { "input": 0, "output": 0 }
+    },
+    "gemini": {
+      "*": { "input": 0, "output": 0 },
+      "_paid": {
+        "gemini-3.8-flash": { "input": 0.75, "output": 3.75, "cacheRead": 0.075 },
+        "gemini-3.7-flash": { "input": 0.75, "output": 3.75, "cacheRead": 0.075 },
+        "gemini-3.5-flash": { "input": 1.5, "output": 9, "cacheRead": 0.15 },
+        "gemini-3.5-flash-lite": { "input": 0.3, "output": 2.5, "cacheRead": 0.03 },
+        "gemini-3.1-flash-lite": { "input": 0.25, "output": 1.5, "cacheRead": 0.025 }
+      }
+    }
+  }
+}

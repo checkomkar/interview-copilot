@@ -102,7 +102,7 @@ async function stopAll(): Promise<void> {
 
 api.onStart(async (p: CaptureStartPayload) => {
   await stopAll()
-  await startSource('loopback', openLoopback)
+  if (p.loopback) await startSource('loopback', openLoopback)
   if (p.mic) await startSource('mic', () => openMic(p.micDeviceId))
 })
 

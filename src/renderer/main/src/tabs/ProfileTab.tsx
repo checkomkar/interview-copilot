@@ -77,7 +77,8 @@ export function ProfileTab() {
           <h1 className="text-xl font-semibold">Profile</h1>
           <p className="mt-1 text-sm text-muted">
             Answers use this to speak as you, from your real experience. On save, the resume and job description are summarized with the fast
-            model; the summaries are sent with every answer and cached.
+            model; the summaries are sent with every answer and cached. Work Mode uses only your name and role from here — its context comes from
+            the Projects tab.
           </p>
         </div>
 

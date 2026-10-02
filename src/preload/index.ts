@@ -10,17 +10,35 @@ import type {
   CaptureMicPayload,
   CaptureStartPayload,
   CaptureStatus,
+  CostUpdate,
+  DisplayInfo,
   LatencySample,
   NavigateTarget,
   OverlayNav,
   QaSnapshot,
   QuestionDetected,
+  ScreenshotPending,
   SessionStartResult,
   SessionState,
   TranscriptUpdate
 } from '../shared/ipc'
 import type { ProfileInput, Profile, ProfileSaveResult, ResumeImportResult } from '../shared/profile'
-import type { ApiKeyProvider, ApiKeyStatus, DeepPartial, Settings } from '../shared/settings'
+import type { PracticeResult, PracticeStart, PracticeState } from '../shared/practice'
+import type {
+  ImportInput,
+  ImportResult,
+  Project,
+  ProjectInput,
+  Proposal,
+  ProposalDecision,
+  TaskInput,
+  TeamsSource,
+  TeamsStatus,
+  WorkPick,
+  WorkResult
+} from '../shared/work'
+import type { HistoryExportResult, HistorySession, HistorySessionSummary } from '../shared/history'
+import type { ApiKeyProvider, ApiKeyStatus, DeepPartial, HotkeyAction, Settings } from '../shared/settings'
 
 type Unsubscribe = () => void
 
@@ -53,7 +71,33 @@ const api = {
     onDone: (cb: (d: AnswerDone) => void) => subscribe(IPC.answerDone, cb),
     onError: (cb: (e: AnswerError) => void) => subscribe(IPC.answerError, cb),
     onReset: (cb: () => void) => subscribe(IPC.qaReset, cb),
-    onNav: (cb: (dir: OverlayNav) => void) => subscribe(IPC.overlayNav, cb)
+    onNav: (cb: (dir: OverlayNav) => void) => subscribe(IPC.overlayNav, cb),
+    /** One-off messages for the overlay (hotkey failures, cost cap). */
+    onNotice: (cb: (message: string) => void) => subscribe(IPC.overlayNotice, cb)
+  },
+  screen: {
+    capture: (): Promise<AnswerActionResult> => ipcRenderer.invoke(IPC.screenCapture),
+    /** Add a screenshot to the next answer without answering yet. */
+    add: (): Promise<AnswerActionResult> => ipcRenderer.invoke(IPC.screenAdd),
+    /** Answer from the waiting screenshots. */
+    answer: (): Promise<AnswerActionResult> => ipcRenderer.invoke(IPC.screenAnswer),
+    /** Remove one waiting screenshot by position, or all. */
+    clear: (index?: number): Promise<void> => ipcRenderer.invoke(IPC.screenClear, index === undefined ? {} : { index }),
+    pending: (): Promise<ScreenshotPending> => ipcRenderer.invoke(IPC.screenPending),
+    displays: (): Promise<DisplayInfo[]> => ipcRenderer.invoke(IPC.screenDisplays),
+    onPending: (cb: (p: ScreenshotPending) => void) => subscribe(IPC.screenPending, cb)
+  },
+  cost: {
+    get: (): Promise<CostUpdate> => ipcRenderer.invoke(IPC.costGet),
+    onUpdate: (cb: (c: CostUpdate) => void) => subscribe(IPC.costUpdate, cb),
+    openPricing: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.costOpenPricing)
+  },
+  history: {
+    list: (): Promise<HistorySessionSummary[]> => ipcRenderer.invoke(IPC.historyList),
+    get: (id: string): Promise<HistorySession | null> => ipcRenderer.invoke(IPC.historyGet, { id }),
+    delete: (id: string): Promise<HistorySessionSummary[]> => ipcRenderer.invoke(IPC.historyDelete, { id }),
+    deleteAll: (): Promise<HistorySessionSummary[]> => ipcRenderer.invoke(IPC.historyDeleteAll),
+    exportMarkdown: (id: string): Promise<HistoryExportResult> => ipcRenderer.invoke(IPC.historyExport, { id })
   },
   profile: {
     get: (): Promise<Profile> => ipcRenderer.invoke(IPC.profileGet),
@@ -66,11 +110,72 @@ const api = {
     setApiKey: (provider: ApiKeyProvider, key: string): Promise<ApiKeyStatus> =>
       ipcRenderer.invoke(IPC.apiKeySet, { provider, key }),
     apiKeyStatus: (): Promise<ApiKeyStatus> => ipcRenderer.invoke(IPC.apiKeyStatus),
-    onChanged: (cb: (s: Settings) => void) => subscribe(IPC.settingsChanged, cb)
+    onChanged: (cb: (s: Settings) => void) => subscribe(IPC.settingsChanged, cb),
+    /** Hotkeys that couldn't be registered (another app owns them). */
+    hotkeyFailures: (): Promise<HotkeyAction[]> => ipcRenderer.invoke(IPC.hotkeysStatus),
+    onHotkeyFailures: (cb: (failed: HotkeyAction[]) => void) => subscribe(IPC.hotkeysStatus, cb)
+  },
+  practice: {
+    getState: (): Promise<PracticeState> => ipcRenderer.invoke(IPC.practiceState),
+    onState: (cb: (s: PracticeState) => void) => subscribe(IPC.practiceState, cb),
+    start: (opts: PracticeStart): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceStart, opts),
+    /** Start recording the spoken answer. */
+    record: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceRecord),
+    /** Stop recording and get feedback. */
+    finishAnswer: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceFinishAnswer),
+    submit: (text: string): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceSubmit, { text }),
+    retry: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceRetry),
+    redo: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceRedo),
+    skip: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceSkip),
+    next: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceNext),
+    finish: (): Promise<PracticeResult> => ipcRenderer.invoke(IPC.practiceFinish),
+    reset: (): Promise<void> => ipcRenderer.invoke(IPC.practiceReset)
+  },
+  /** Work Mode project store and status quick-pick (FR-W1..W6). */
+  work: {
+    list: (): Promise<Project[]> => ipcRenderer.invoke(IPC.workProjects),
+    onChanged: (cb: (projects: Project[]) => void) => subscribe(IPC.workProjectsChanged, cb),
+    save: (input: ProjectInput): Promise<Project> => ipcRenderer.invoke(IPC.workProjectSave, input),
+    delete: (id: string): Promise<Project[]> => ipcRenderer.invoke(IPC.workProjectDelete, { id }),
+    saveTask: (input: TaskInput): Promise<Project> => ipcRenderer.invoke(IPC.workTaskSave, input),
+    deleteTask: (id: string): Promise<Project | null> => ipcRenderer.invoke(IPC.workTaskDelete, { id }),
+    /** `taskId`: the item it is about; `author`: who said it, when not the user. */
+    addUpdate: (projectId: string, text: string, opts: { taskId?: string; author?: string } = {}): Promise<Project> =>
+      ipcRenderer.invoke(IPC.workUpdateAdd, { projectId, text, ...opts }),
+    deleteUpdate: (id: number): Promise<Project | null> => ipcRenderer.invoke(IPC.workUpdateDelete, { id }),
+    /** Overlay: a status update on the picked project. */
+    status: (projectId: string, question?: string): Promise<WorkResult> =>
+      ipcRenderer.invoke(IPC.workStatus, question ? { projectId, question } : { projectId }),
+    onPick: (cb: (pick: WorkPick) => void) => subscribe(IPC.workPick, cb),
+    /** Pasted Teams text or chat screenshots → proposals for review (FR-T1/T2). */
+    importUpdates: (input: ImportInput): Promise<ImportResult> => ipcRenderer.invoke(IPC.workImport, input),
+    proposals: (): Promise<Proposal[]> => ipcRenderer.invoke(IPC.workProposals),
+    onProposals: (cb: (pending: Proposal[]) => void) => subscribe(IPC.workProposalsChanged, cb),
+    decide: (decision: ProposalDecision): Promise<Proposal> => ipcRenderer.invoke(IPC.workProposalDecide, decision)
+  },
+  /** Teams sync (FR-T3); tokens never reach the renderer. */
+  teams: {
+    status: (): Promise<TeamsStatus> => ipcRenderer.invoke(IPC.teamsStatus),
+    onStatus: (cb: (s: TeamsStatus) => void) => subscribe(IPC.teamsStatus, cb),
+    /** Start device-code sign-in; the code shows in the status. */
+    signIn: (): Promise<{ userCode: string; verificationUri: string }> => ipcRenderer.invoke(IPC.teamsSignIn),
+    openSignIn: (): Promise<void> => ipcRenderer.invoke(IPC.teamsOpenSignIn),
+    cancelSignIn: (): Promise<void> => ipcRenderer.invoke(IPC.teamsCancelSignIn),
+    signOut: (): Promise<void> => ipcRenderer.invoke(IPC.teamsSignOut),
+    sources: (): Promise<TeamsSource[]> => ipcRenderer.invoke(IPC.teamsSources),
+    syncNow: (): Promise<TeamsStatus> => ipcRenderer.invoke(IPC.teamsSyncNow)
+  },
+  app: {
+    info: (): Promise<{ version: string; dataDir: string }> => ipcRenderer.invoke(IPC.appInfo),
+    /** Asks for confirmation, wipes history, profile, settings and keys, then restarts the app. */
+    deleteAllData: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.appDeleteAllData),
+    quit: (): Promise<void> => ipcRenderer.invoke(IPC.appQuit)
   },
   ui: {
     onNavigate: (cb: (target: NavigateTarget) => void) => subscribe(IPC.uiNavigate, cb),
-    toggleOverlay: (): Promise<void> => ipcRenderer.invoke(IPC.overlayToggle)
+    toggleOverlay: (): Promise<void> => ipcRenderer.invoke(IPC.overlayToggle),
+    toggleMain: (): Promise<void> => ipcRenderer.invoke(IPC.mainToggle),
+    quit: (): Promise<void> => ipcRenderer.invoke(IPC.appQuit)
   },
   /** Used only by the hidden capture window. */
   capture: {

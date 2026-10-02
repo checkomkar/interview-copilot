@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings } from '@shared/settings'
+import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings, upgradeSettings } from '@shared/settings'
 
 describe('settings schema', () => {
   it('produces PRD §8 defaults from an empty object', () => {
-    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', language: 'en', endpointingMs: 300, utteranceEndMs: 1000 })
+    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000 })
     expect(DEFAULT_SETTINGS.llm.answerModel).toBe('claude-sonnet-5-5')
     expect(DEFAULT_SETTINGS.llm.fastModel).toBe('claude-haiku-4-5-20251001')
     expect(DEFAULT_SETTINGS.detection).toEqual({ autoAnswer: true, minWords: 6, debounceMs: 2000, pauseGraceMs: 1500 })
@@ -44,5 +44,32 @@ describe('settings schema', () => {
     const s = mergeSettings(DEFAULT_SETTINGS, { apiKey: 'secret', stt: { foo: 1 } }) as unknown as Record<string, unknown>
     expect(s.apiKey).toBeUndefined()
     expect((s.stt as Record<string, unknown>).foo).toBeUndefined()
+  })
+})
+
+describe('coding answer settings', () => {
+  it('defaults to step-by-step coding answers with room for all three versions', () => {
+    expect(DEFAULT_SETTINGS.llm.codingAnswer).toBe('stepwise')
+    expect(DEFAULT_SETTINGS.llm.maxTokensCoding).toBe(3000)
+  })
+
+  it('raises a saved coding budget still at the old 1500 default, and leaves custom budgets alone', () => {
+    const old = mergeSettings(DEFAULT_SETTINGS, { llm: { maxTokensCoding: 1500 } })
+    expect(upgradeSettings(old)?.llm.maxTokensCoding).toBe(3000)
+    expect(upgradeSettings(mergeSettings(DEFAULT_SETTINGS, { llm: { maxTokensCoding: 2000 } }))).toBeNull()
+  })
+})
+
+describe('hotkey upgrades', () => {
+  it('moves the old add-screenshot hotkey (often owned by other apps) to Ctrl+Shift+Alt+S', () => {
+    expect(DEFAULT_SETTINGS.hotkeys.addScreenshot).toBe('CommandOrControl+Shift+Alt+S')
+    const old = mergeSettings(DEFAULT_SETTINGS, { hotkeys: { addScreenshot: 'CommandOrControl+Alt+S' } })
+    expect(upgradeSettings(old)?.hotkeys.addScreenshot).toBe('CommandOrControl+Shift+Alt+S')
+    expect(upgradeSettings(mergeSettings(DEFAULT_SETTINGS, { hotkeys: { addScreenshot: 'F9' } }))).toBeNull()
+  })
+
+  it('defaults to 5 screenshots per question, capped at 10', () => {
+    expect(DEFAULT_SETTINGS.screen.maxScreenshots).toBe(5)
+    expect(() => mergeSettings(DEFAULT_SETTINGS, { screen: { maxScreenshots: 11 } })).toThrow()
   })
 })

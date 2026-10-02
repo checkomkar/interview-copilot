@@ -44,11 +44,26 @@ export function createOverlayWindow(settings: SettingsStore): BrowserWindow {
 		webPreferences: secureWebPreferences(),
 	});
 
-	win.setContentProtection(true);
+	// win.setContentProtection(true);
 
 	win.setAlwaysOnTop(true, "floating", 1);
 	win.setOpacity(settings.get().overlay.opacity);
-	win.once("ready-to-show", () => win.showInactive());
+	win.once("ready-to-show", () => {
+		win.showInactive();
+		setTimeout(() => {
+			if (!win.isDestroyed()) {
+				win.setContentProtection(true);
+				win.setOpacity(settings.get().overlay.opacity);
+			}
+		}, 100);
+	});
+	// Re-apply protection whenever the overlay is toggled or restored
+	// win.on("show", () => {
+	// 	if (!win.isDestroyed()) win.setContentProtection(true);
+	// });
+	// win.on("restore", () => {
+	// 	if (!win.isDestroyed()) win.setContentProtection(true);
+	// });
 	win.webContents.on("will-navigate", (e, url) => {
 		if (!isAppUrl(url)) e.preventDefault();
 	});

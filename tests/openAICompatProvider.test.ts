@@ -20,7 +20,7 @@ import { LlmRouter } from '../src/main/services/llm/LlmRouter'
 import { OpenAICompatProvider, sseChunks } from '../src/main/services/llm/OpenAICompatProvider'
 import { MockLlm } from './mockLlm'
 
-const pick = ({ answerModel, fastModel }: { answerModel: string; fastModel: string }) => ({ answerModel, fastModel })
+const pick = ({ answerModel, fastModel, visionModel }: { answerModel: string; fastModel: string; visionModel: string }) => ({ answerModel, fastModel, visionModel })
 
 /** A streaming Response whose body arrives in the given pieces (split anywhere, like real TCP reads). */
 function sse(pieces: string[], status = 200): Response {
@@ -436,7 +436,7 @@ describe('provider settings', () => {
     expect(DEFAULT_SETTINGS.llm.fallbackProviders).toEqual(['openrouter', 'gemini'])
     const old = SettingsSchema.parse({ llm: { provider: 'anthropic', answerModel: 'claude-opus-5-5', fastModel: 'claude-haiku-4-5', maxTokens: 600, maxTokensCoding: 1500 } })
     expect(pick(old.llm.openrouter)).toEqual(pick(OPENROUTER_PRESETS.free))
-    expect(activeModels(old)).toEqual({ answerModel: 'claude-opus-5-5', fastModel: 'claude-haiku-4-5' })
+    expect(activeModels(old)).toEqual({ answerModel: 'claude-opus-5-5', fastModel: 'claude-haiku-4-5', visionModel: 'claude-sonnet-5-5' })
   })
 
   it('ships 10+ model free OpenRouter chains and free Groq/Gemini chains', () => {

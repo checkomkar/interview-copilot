@@ -11,7 +11,7 @@ import type {
   SessionState,
   TranscriptUpdate
 } from '@shared/ipc'
-import type { Settings } from '@shared/settings'
+import { STT_PROVIDER_LABELS, type Settings } from '@shared/settings'
 import { createLogger } from '../../logger'
 import type { SttProvider } from '../stt/SttProvider'
 import { TranscriptAssembler } from '../stt/TranscriptAssembler'
@@ -22,15 +22,28 @@ const log = createLogger('session')
 const SILENCE_RMS = 0.005
 const NO_AUDIO_HINT_MS = 20_000
 const TICK_MS = 1000
+/** 16 kHz mono linear16. */
+const PCM_BYTES_PER_SECOND = 16_000 * 2
+/** Consecutive reconnect attempts before the user is told (PRD §9). */
+const RECONNECT_NOTICE_AFTER = 3
 
 export interface SessionDeps {
   getSettings: () => Settings
   getSttApiKey: () => string | null
+  /**
+   * Which lanes a session opens. Default: system audio, plus the mic when the "Me" transcript
+   * setting is on. Practice Mode uses the mic alone.
+   */
+  sources?: (settings: Settings) => AudioSource[]
   createStt: (source: AudioSource, apiKey: string, settings: Settings) => SttProvider
   startCapture: (payload: CaptureStartPayload) => void
   stopCapture: () => void
   /** Start/stop only the mic while a session runs (voice questions). */
   setMic: (payload: CaptureMicPayload) => void
+  /** Seconds of audio streamed to STT, per lane (cost tracking, FR-C1). */
+  onAudioSent?: (source: AudioSource, seconds: number) => void
+  /** Running session cost for the session state. */
+  getCost?: () => number
   now?: () => number
 }
 
@@ -40,6 +53,8 @@ export interface SessionEvents {
   /** An utterance closed (FR-Q1 hook for Phase 2). */
   utteranceEnd: [TranscriptUpdate]
   latency: [LatencySample]
+  /** One-off message for the user (e.g. the speech service keeps dropping). */
+  notice: [string]
 }
 
 interface Lane {
@@ -57,6 +72,9 @@ export class SessionManager extends EventEmitter {
   private stopping = false
   /** Mic lane opened only for voice questions (not the "Me" transcript setting); closed with them. */
   private micForVoiceOnly = false
+  /** The lane whose connection drives the session status. */
+  private primary: AudioSource = 'loopback'
+  private reconnects = 0
   private readonly now: () => number
 
   constructor(private readonly deps: SessionDeps) {
@@ -83,11 +101,13 @@ export class SessionManager extends EventEmitter {
     if (this.stopping) return { ok: false, error: 'Previous session is still stopping — try again.' }
     if (this.isActive()) return { ok: true }
     const apiKey = this.deps.getSttApiKey()
-    if (!apiKey) {
-      return { ok: false, error: 'Add your Deepgram API key in Settings to start a session.', navigate: 'settings' }
-    }
     const settings = this.deps.getSettings()
-    const sources: AudioSource[] = settings.audio.micEnabled ? ['loopback', 'mic'] : ['loopback']
+    if (!apiKey) {
+      return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key in Settings to start a session.`, navigate: 'settings' }
+    }
+    const sources: AudioSource[] = this.deps.sources?.(settings) ?? (settings.audio.micEnabled ? ['loopback', 'mic'] : ['loopback'])
+    this.primary = sources[0]
+    this.reconnects = 0
 
     this.startedAt = this.now()
     this.lastLoopbackAudioAt = this.startedAt
@@ -96,7 +116,7 @@ export class SessionManager extends EventEmitter {
 
     for (const source of sources) this.openLane(source, apiKey, settings)
 
-    this.deps.startCapture({ mic: settings.audio.micEnabled, micDeviceId: settings.audio.micDeviceId })
+    this.deps.startCapture({ loopback: sources.includes('loopback'), mic: sources.includes('mic'), micDeviceId: settings.audio.micDeviceId })
     this.ticker = setInterval(() => this.tick(), TICK_MS)
     log.info(`session started (sources: ${sources.join(', ')})`)
     return { ok: true }
@@ -112,7 +132,7 @@ export class SessionManager extends EventEmitter {
     const settings = this.deps.getSettings()
     if (on && !this.lanes.has('mic')) {
       const apiKey = this.deps.getSttApiKey()
-      if (!apiKey) return { ok: false, error: 'Add your Deepgram API key in Settings.', navigate: 'settings' }
+      if (!apiKey) return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key in Settings.`, navigate: 'settings' }
       this.openLane('mic', apiKey, settings)
       this.deps.setMic({ on: true, deviceId: settings.audio.micDeviceId })
       this.micForVoiceOnly = true
@@ -158,6 +178,7 @@ export class SessionManager extends EventEmitter {
     if (!lane) return
     const buf = chunk.pcm instanceof ArrayBuffer ? Buffer.from(chunk.pcm) : Buffer.from(chunk.pcm.buffer, chunk.pcm.byteOffset, chunk.pcm.byteLength)
     lane.stt.sendAudio(buf)
+    this.deps.onAudioSent?.(chunk.source, buf.byteLength / PCM_BYTES_PER_SECOND)
   }
 
   handleAudioLevel(level: AudioLevel): void {
@@ -172,7 +193,7 @@ export class SessionManager extends EventEmitter {
     if (status.state === 'error') {
       const what = status.source === 'loopback' ? 'System audio capture' : 'Microphone capture'
       const message = `${what} failed: ${status.message ?? 'unknown error'}`
-      if (status.source === 'loopback') {
+      if (status.source === this.primary) {
         void this.stop({ error: message })
       } else {
         // Mic is optional; keep the session alive without it.
@@ -228,9 +249,18 @@ export class SessionManager extends EventEmitter {
       if (current()) this.emit('latency', { stage: 'stt', source, ms, ts: this.now() })
     })
     stt.on('state', (s) => {
-      if (!current() || source !== 'loopback') return
-      if (s === 'open') this.setState({ ...this.state, status: 'listening', message: undefined })
-      else if (s === 'reconnecting') this.setState({ ...this.state, status: 'reconnecting', message: 'Reconnecting to speech service…' })
+      if (!current() || source !== this.primary) return
+      if (s === 'open') {
+        if (this.reconnects >= RECONNECT_NOTICE_AFTER) this.emit('notice', 'Speech-to-text reconnected.')
+        this.reconnects = 0
+        this.setState({ ...this.state, status: 'listening', message: undefined })
+      } else if (s === 'reconnecting') {
+        this.reconnects += 1
+        if (this.reconnects === RECONNECT_NOTICE_AFTER) {
+          this.emit('notice', 'Speech-to-text keeps disconnecting — check your internet connection. Still retrying…')
+        }
+        this.setState({ ...this.state, status: 'reconnecting', message: 'Reconnecting to speech service…' })
+      }
     })
     stt.on('error', (err, fatal) => {
       if (!current()) return
@@ -247,7 +277,7 @@ export class SessionManager extends EventEmitter {
   private tick(): void {
     const silentFor = this.now() - this.lastLoopbackAudioAt
     const hint =
-      this.state.status === 'listening' && silentFor >= NO_AUDIO_HINT_MS
+      this.primary === 'loopback' && this.state.status === 'listening' && silentFor >= NO_AUDIO_HINT_MS
         ? 'No system audio detected — check your output device.'
         : undefined
     this.setState({ ...this.state, elapsed: this.elapsed(), hint })
@@ -258,7 +288,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private setState(next: SessionState): void {
-    this.state = next
+    this.state = this.deps.getCost ? { ...next, cost: this.deps.getCost() } : next
     this.emit('state', next)
   }
 }
