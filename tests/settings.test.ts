@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings, upgradeSettings } from '@shared/settings'
+import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings, upgradeSettings, sttModel, sttProviderOrder } from '@shared/settings'
 
 describe('settings schema', () => {
   it('produces PRD §8 defaults from an empty object', () => {
-    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000 })
+    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000, openrouterModel: 'openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3', groqModel: 'whisper-large-v3-turbo, whisper-large-v3', fallbackProviders: ['assemblyai', 'groq', 'openrouter'] })
+  })
+
+  it('orders STT providers: main first, then backups, without duplicates', () => {
+    const s = mergeSettings(DEFAULT_SETTINGS, { stt: { provider: 'groq', fallbackProviders: ['deepgram', 'groq', 'openrouter'] } })
+    expect(sttProviderOrder(s)).toEqual(['groq', 'deepgram', 'openrouter'])
+    expect(sttModel(s)).toBe('whisper-large-v3-turbo, whisper-large-v3')
+    expect(sttModel(s, 'deepgram')).toBe('nova-3')
     expect(DEFAULT_SETTINGS.llm.answerModel).toBe('claude-sonnet-5-5')
     expect(DEFAULT_SETTINGS.llm.fastModel).toBe('claude-haiku-4-5-20251001')
     expect(DEFAULT_SETTINGS.detection).toEqual({ autoAnswer: true, minWords: 6, debounceMs: 2000, pauseGraceMs: 1500 })

@@ -34,11 +34,18 @@ export const APP_MODE_LABELS: Record<AppMode, string> = {
 	interview: "Interview",
 };
 
-export const STT_PROVIDERS = ["deepgram", "assemblyai"] as const;
+/**
+ * Deepgram and AssemblyAI stream over a WebSocket. OpenRouter and Groq transcribe each phrase
+ * over HTTPS after a pause (slower, but they work where streaming is blocked and share the
+ * answer providers' keys).
+ */
+export const STT_PROVIDERS = ["deepgram", "assemblyai", "openrouter", "groq"] as const;
 export type SttProviderId = (typeof STT_PROVIDERS)[number];
 export const STT_PROVIDER_LABELS: Record<SttProviderId, string> = {
 	deepgram: "Deepgram",
 	assemblyai: "AssemblyAI",
+	openrouter: "OpenRouter",
+	groq: "Groq",
 };
 
 export const LLM_PROVIDERS = [
@@ -184,6 +191,23 @@ export const SettingsSchema = z.object({
 			model: z.string().min(1).default("nova-3"),
 			/** AssemblyAI streaming model (`universal-streaming-english` is the cheapest and fastest). */
 			assemblyaiModel: z.string().min(1).default("universal-streaming-english"),
+			/** OpenRouter transcription models, tried in order (comma or newline separated). */
+			openrouterModel: z
+				.string()
+				.min(1)
+				.default(
+					"openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3",
+				),
+			/** Groq Whisper models, tried in order. Free tier: 8 hours of audio a day. */
+			groqModel: z
+				.string()
+				.min(1)
+				.default("whisper-large-v3-turbo, whisper-large-v3"),
+			/** Tried in order when the main provider can't connect or fails (only those with an API key). */
+			fallbackProviders: z
+				.array(z.enum(STT_PROVIDERS))
+				.max(STT_PROVIDERS.length)
+				.default(["assemblyai", "groq", "openrouter"]),
 			language: z.string().min(1).default("en"),
 			endpointingMs: z.number().int().min(10).max(5000).default(300),
 			utteranceEndMs: z.number().int().min(1000).max(5000).default(1000),
@@ -221,6 +245,8 @@ export const SettingsSchema = z.object({
 			 * (with its poor complexity), then the optimal solution. `direct`: approach + optimal code only.
 			 */
 			codingAnswer: z.enum(["stepwise", "direct"]).default("stepwise"),
+			/** System design answers, and questions asking to draw something, include a Mermaid diagram the overlay draws. */
+			diagrams: z.boolean().default(true),
 		})
 		.prefault({}),
 	audio: z
@@ -442,11 +468,27 @@ export function modelFor(
 			: m.answerModel;
 }
 
-/** The STT model for the selected provider. */
-export function sttModel(settings: Settings): string {
-	return settings.stt.provider === "assemblyai"
-		? settings.stt.assemblyaiModel
-		: settings.stt.model;
+/** The STT model field for one provider (the selected one by default). */
+export function sttModel(
+	settings: Settings,
+	provider: SttProviderId = settings.stt.provider,
+): string {
+	const { stt } = settings;
+	switch (provider) {
+		case "assemblyai":
+			return stt.assemblyaiModel;
+		case "openrouter":
+			return stt.openrouterModel;
+		case "groq":
+			return stt.groqModel;
+		default:
+			return stt.model;
+	}
+}
+
+/** Main STT provider, then the selected fallbacks, without duplicates. */
+export function sttProviderOrder(settings: Settings): SttProviderId[] {
+	return [...new Set([settings.stt.provider, ...settings.stt.fallbackProviders])];
 }
 
 /** Model chains for the primary LLM provider. */

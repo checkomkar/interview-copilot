@@ -61,3 +61,10 @@ body.overlay {
   box-shadow: inset 2px 0 0 var(--color-accent);
   padding-left: 0.6em;
 }
+
+.ov-btn.ov-quit-armed,
+.ov-btn.ov-quit-armed:not(:disabled):hover {
+  color: #fff;
+  background: #d9534f;
+  font-size: 11px;
+}

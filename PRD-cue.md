@@ -79,11 +79,13 @@ Both modes share the same audio/screen capture, speech-to-text, overlay, LLM pro
 
 ### 3.2 Speech-to-Text (STT)
 
-- **FR-S1:** Pluggable provider interface `SttProvider { start(), sendAudio(chunk), stop(), on('partial'|'final'|'utteranceEnd'|'error') }`. WebSocket plumbing (reconnect, buffering, keep-alive, flush on stop) is shared by all providers (`SocketSttProvider`); `stt.provider` picks one per session.
+- **FR-S1:** Pluggable provider interface `SttProvider { start(), sendAudio(chunk), stop(), on('partial'|'final'|'utteranceEnd'|'error') }`. WebSocket plumbing (reconnect, buffering, keep-alive, flush on stop) is shared by the streaming providers (`SocketSttProvider`); phrase-based HTTP providers share `ChunkedSttProvider` (FR-S6). `stt.provider` picks the main one; `stt.fallbackProviders` back it up (FR-S7).
 - **FR-S2:** Default provider: **Deepgram streaming WebSocket** (latest general English model, `interim_results=true`, `smart_format=true`, `endpointing` ~300 ms, `utterance_end_ms` ~1000 ms). Model name configurable in settings.
 - **FR-S3:** Secondary provider: **AssemblyAI** Universal-Streaming v3 (`wss://streaming.assemblyai.com/v3/ws`, raw key in `Authorization`, `pcm_s16le` 16 kHz, `min_turn_silence` = `endpointingMs`, `max_turn_silence` = `utteranceEndMs`). Model `stt.assemblyaiModel` (default `universal-streaming-english`, ~$0.15/h; `universal-streaming-multilingual`, `universal-3-6-pro`). A turn's partials are shown live; with `format_turns` the punctuated copy of a finished turn is kept (the unformatted one is used if none arrives within 1.5 s); each turn becomes one final + `utteranceEnd`. Turn numbers restart per connection. A policy close (bad key, no balance) is fatal. Stretch: local `whisper.cpp` via a sidecar process.
 - **FR-S4:** Auto-reconnect with exponential backoff (0.5 s doubling to 8 s, max **8** tries ≈ 40 s, so a 30 s network drop resumes — NFR reliability); buffer up to 5 s of audio during reconnect. After 3 consecutive failed tries the overlay shows a notice (and another when it reconnects).
 - **FR-S5:** Send keep-alive messages during silence per provider docs.
+- **FR-S6:** Phrase-based providers over HTTPS, for networks that block streaming WebSockets and for users without a Deepgram/AssemblyAI key: **OpenRouter** (`POST /api/v1/audio/transcriptions`, JSON with base64 WAV under `input_audio`; `stt.openrouterModel`, default `openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3`) and **Groq** Whisper (OpenAI-compatible multipart; `stt.groqModel`, default `whisper-large-v3-turbo, whisper-large-v3`, free tier 8 h/day). Both reuse the answer providers' API keys. Audio is cut into phrases by energy (RMS > 0.01, 300 ms pre-roll, bursts under 250 ms dropped) at a pause of `utteranceEndMs`, or every 12 s during long speech; each phrase is one final segment (+ `utteranceEnd` after a pause). Phrases go one at a time so text stays in order (at most 4 waiting; older ones dropped). Model fields are chains: a model the service rejects (400/404/422) is skipped for the session. 401/403 (key) and 402 (credits) are fatal; 3 consecutive failed phrases are fatal. Whisper's stock noise phrases ("Thank you.", "you"…) are dropped on short segments.
+- **FR-S7:** STT fallback chain: main provider, then `stt.fallbackProviders` (default AssemblyAI → Groq → OpenRouter), only those with a key; a session starts if any has one. A provider that gives up (fatal error) or fails its first 2 connection attempts (WebSocket handshake times out after 8 s) is replaced by the next, per lane; up to 5 s of audio it never transcribed is replayed to the next one. The overlay shows "<from> failed (<reason>) — switched to <to>." No switching back within a session. If the last one fails too, the session stops with every provider's reason. Cost is metered against the provider in use.
 
 ### 3.3 Question Detection (Interview Mode; Work Mode reuses the pipeline — FR-W8)
 
@@ -138,6 +140,7 @@ Both modes share the same audio/screen capture, speech-to-text, overlay, LLM pro
   - `llm.visionProvider` (default `auto`) picks the first provider for screenshots (e.g. paid OpenRouter while text answers stay on free Groq); the main provider and backups follow. OpenRouter screenshot requests send `reasoning: { enabled: false }`.
   - Screenshot requests retry once on the vision chain (never the text-only fast models) and fail over only to providers with a vision chain.
 - **FR-G10:** Reasoning effort per provider (`default|none|minimal|low|medium|high`): OpenRouter applies it to answers only; Groq/Gemini to answers, with the classifier and summaries at the lowest supported level. A model that rejects the setting is retried once with its default. Defaults favour latency (Sonnet 5.5 via Anthropic: thinking off; Groq: `low`; Gemini: `minimal`).
+- **FR-G12:** Diagrams (`llm.diagrams`, default on). The answer system prompt asks for ONE Mermaid diagram in a ```` ```mermaid ```` block for system design and whenever the interviewer asks to draw, sketch or diagram something (`flowchart LR` for architecture/data flow, `sequenceDiagram` for request flows, `erDiagram`, `classDiagram`, `stateDiagram-v2`; ≤ ~10 nodes, short quoted labels, no styling or HTML). A question matching draw/sketch/diagram/whiteboard/flowchart/UML/ER model (not a coding question) gets the style "diagram first, then 3–5 bullets in drawing order" and the long token budget. The overlay and History draw ```` ```mermaid ```` blocks with Mermaid (lazy-loaded, `securityLevel: strict`, theme follows the overlay's dark/light); while the answer streams a "Drawing diagram…" placeholder shows; a **Code** toggle shows the source; invalid Mermaid falls back to the code with a note. No image-generation model is used: text diagrams work with every provider in the chains, stream at answer speed and always have legible labels.
 
 ### 3.6 Overlay Window
 
@@ -150,6 +153,7 @@ Both modes share the same audio/screen capture, speech-to-text, overlay, LLM pro
 - **FR-O7:** Ask bar at the bottom of the overlay: a text input (Enter asks; `Ctrl+Shift+K` focuses it from anywhere; works without a session) and a **mic toggle** for voice questions (`Ctrl+Shift+M`). While on, the user's mic speech is transcribed and answered directly (no question detection), with a live line showing what is heard. Turning it on starts a session if none is running and keeps the Q&As already shown; the mic is opened only while the toggle is on.
 - **FR-O8:** Layout, switchable from the overlay header and Settings, remembered: **one at a time** (latest answer, ‹ › to flip) or **list** (every Q&A of the session, numbered, in one scroll; new questions scroll into view and streaming text is followed while the user is at the bottom; ‹ › jump to and mark the previous/next Q&A).
 - **FR-O9:** Under each finished answer, show which model and provider answered (e.g. `gpt-oss-120b · Groq`).
+- **FR-O10:** Closing the overlay (header ✕ or Alt+F4) only hides it; the app, hotkeys and a running session keep going, and `Ctrl+Shift+H` shows it again. Quitting is explicit: the header's ⏻ button (asks "Quit?" — a second click within 3 s quits) or `Ctrl+Shift+Q`.
 
 ### 3.7 Main Window (Control Panel)
 
@@ -393,6 +397,11 @@ Rules:
   (codingAnswer = "direct": 2-3 bullet approach, time/space complexity, then clean code
   in {preferredLanguage} with brief comments.)
 - System design: requirements → components → data flow → trade-offs.
+- (llm.diagrams on, FR-G12) Diagrams: for system design, and whenever I'm asked to draw, sketch
+  or diagram something, include ONE Mermaid diagram in a ```mermaid block — flowchart LR for
+  architecture and data flow, sequenceDiagram for request/message flows, erDiagram for schemas,
+  classDiagram or stateDiagram-v2 when they fit. At most ~10 nodes, short quoted labels, no
+  styling, classDef, notes or HTML. It must be valid Mermaid.
 - If a screenshot is attached, use it as the primary source for the
   problem statement.
 - If the transcript is garbled, answer the most likely intended question
@@ -557,6 +566,9 @@ All handlers validate payloads with zod.
 		"provider": "deepgram",
 		"model": "nova-3",
 		"assemblyaiModel": "universal-streaming-english",
+		"openrouterModel": "openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3",
+		"groqModel": "whisper-large-v3-turbo, whisper-large-v3",
+		"fallbackProviders": ["assemblyai", "groq", "openrouter"],
 		"language": "en",
 		"endpointingMs": 300,
 		"utteranceEndMs": 1000
@@ -586,7 +598,8 @@ All handlers validate payloads with zod.
 		"…": "each provider block also has visionModel (Groq: qwen/qwen3.8-27b)",
 		"maxTokens": 600,
 		"maxTokensCoding": 3000,
-		"codingAnswer": "stepwise"
+		"codingAnswer": "stepwise",
+		"diagrams": true
 	},
 	"detection": {
 		"autoAnswer": true,
@@ -633,13 +646,14 @@ All handlers validate payloads with zod.
 }
 ```
 
-`mode` is `work` or `interview` (settings saved before v2.0 start in `interview`). `stt.provider` is `deepgram` or `assemblyai`; `model` is the Deepgram model. Model IDs must be editable strings in the UI so they can be updated without code changes. Top-level `answerModel`/`fastModel` are the Anthropic slots (kept there for settings saved before other providers existed). API keys (Deepgram, AssemblyAI, Anthropic, OpenRouter, Groq, Gemini) are stored encrypted, never in this file.
+`mode` is `work` or `interview` (settings saved before v2.0 start in `interview`). `stt.provider` is `deepgram`, `assemblyai`, `openrouter` or `groq`; `model` is the Deepgram model; `openrouterModel`/`groqModel` are model chains (FR-S6); `fallbackProviders` back up the main one (FR-S7). Model IDs must be editable strings in the UI so they can be updated without code changes. Top-level `answerModel`/`fastModel` are the Anthropic slots (kept there for settings saved before other providers existed). API keys (Deepgram, AssemblyAI, Anthropic, OpenRouter, Groq, Gemini) are stored encrypted, never in this file.
 
 ---
 
 ## 9. Error Handling
 
-- Missing API key → block session start, deep-link to Settings (an LLM key for the main or any backup provider is enough).
+- Missing API key → block session start, deep-link to Settings (an LLM key for the main or any backup provider is enough; likewise for speech-to-text).
+- STT provider fails for good or can't connect → the next backup takes over with an overlay notice (FR-S7); only when all have failed does the session stop.
 - STT disconnect → status dot amber, auto-reconnect (FR-S4), overlay notice after 3 consecutive failures and on recovery.
 - A renderer crash → logged and the window reloaded; if the hidden capture page crashes, the live session (or practice recording) stops with "Audio capture crashed — start again".
 - LLM 429/529 (or 502/503 from OpenRouter) → next model in the chain / next backup provider (FR-G9); then retry once after 1 s, then fall back to `fastModel`. Models and providers on cooldown are skipped without a request.
@@ -903,6 +917,8 @@ User-requested changes after v1.0. Each entry lists what changed and where it is
 
 | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Sections                                                                                                                                                      |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-03 | Diagrams in answers (user request: interviewers ask to draw architecture or sequence diagrams). Decided against image-generation models (garbled labels, slow, few providers); the answer model writes Mermaid and the overlay draws it. System design and "draw/sketch/diagram…" questions; setting Answers → Diagrams. | FR-G12 (new), §6.1, §8 |
+| 2026-10-03 | Speech-to-text fallbacks (user request: Deepgram failed on a friend's PC). OpenRouter and Groq transcription added as phrase-based HTTP providers using the existing keys; main provider + backups tried in order, switching on a fatal error or 2 failed connects, with an overlay notice; WebSocket handshake timeout 8 s; per-retry `reconnecting` reported once. Overlay ✕ / Alt+F4 now hide the overlay instead of quitting; explicit ⏻ Quit button with a confirm click. | FR-S1, FR-S6, FR-S7 (new), FR-O10 (new), §8, §9 |
 | 2026-10-03 | **v2.1 — Enterprise Edition (SaaS) section added** at the user's request: a subscription product for companies, used by every employee. Work Mode only (Interview Mode and Practice out; hiding the overlay explicitly a non-goal, transparency required); company sign-in, shared team projects, server-side Teams and Jira/ADO ingestion, LLM gateway, admin console and policies, billing, compliance, deployment models, phases E1–E3. | §13 (new), Change Log renumbered to §14 |
 | 2026-10-03 | Built Phases 5.1 and 7. Decided while building: Teams sync needs the organisation's own app registration (client ID + tenant), channels are opt-in (admin consent), the first sync reads the last 24 h, raw messages aren't stored (FR-T6 simplified), duplicates (same message, same bug) are merged, and no overlay hotkey for imports. | FR-T1–T6, §5.4, §6.10, §7, §8, §9, §10 |
 | 2026-10-02 | Work items and Teams updates (user request: projects have many separately-asked items — deployments, approvals, bugs with owners — and developers report status in Teams). Items get kind, owner, waiting on, environment, follow-up and their own updates; item-level and list questions; typed questions status-checked; different-project questions never merged (bug found in testing); exact stored status in answers. Teams: paste and screenshot import with review (works with personal Teams), Graph sync for work accounts, and a local mock Graph server to simulate the enterprise tenant. Jira/Azure DevOps later. | FR-W2–W10, FR-W7a/b, §3.10.6 (FR-T1–T6), §10 Phases 5.1 and 7 |

@@ -37,9 +37,11 @@ import { SessionManager } from './services/session/SessionManager'
 import { DeepgramProvider } from './services/stt/DeepgramProvider'
 import { AssemblyAIProvider } from './services/stt/AssemblyAIProvider'
 import type { SttProvider } from './services/stt/SttProvider'
+import { FallbackSttProvider } from './services/stt/FallbackSttProvider'
+import { GroqSttProvider, OpenRouterSttProvider } from './services/stt/ChunkedSttProvider'
 import { PracticeService } from './services/practice/PracticeService'
 import { HotkeyService } from './services/hotkeys/HotkeyService'
-import { activeModels, LLM_PROVIDER_LABELS, sttModel, type AppMode, type CompatProviderId, type Settings } from '@shared/settings'
+import { activeModels, LLM_PROVIDER_LABELS, splitModels, STT_PROVIDER_LABELS, sttModel, sttProviderOrder, type AppMode, type CompatProviderId, type Settings, type SttProviderId } from '@shared/settings'
 import { AnthropicProvider } from './services/llm/AnthropicProvider'
 import { OpenAICompatProvider } from './services/llm/OpenAICompatProvider'
 import { LlmRouter } from './services/llm/LlmRouter'
@@ -429,10 +431,15 @@ app.whenReady().then(() => {
     return null
   }
 
-  /** The STT provider chosen in Settings (Deepgram or AssemblyAI, FR-S1..S3). */
-  const createStt = (source: string, apiKey: string, s: Settings): SttProvider =>
-    s.stt.provider === 'assemblyai'
-      ? new AssemblyAIProvider({
+  /** Which STT provider each lane is using right now (fallbacks change it mid-session). */
+  const activeStt = new Map<string, SttProviderId>()
+  /** The main STT provider, then the backups that have a key (FR-S1..S3). */
+  const sttChain = (s: Settings) => sttProviderOrder(s).filter((id) => settings.getApiKey(id))
+  const createSttFor = (id: SttProviderId, source: string, apiKey: string, s: Settings): SttProvider => {
+    const chunked = { apiKey, label: source, language: s.stt.language, silenceMs: s.stt.utteranceEndMs, models: splitModels(sttModel(s, id)) }
+    switch (id) {
+      case 'assemblyai':
+        return new AssemblyAIProvider({
           apiKey,
           label: source,
           model: s.stt.assemblyaiModel,
@@ -440,7 +447,12 @@ app.whenReady().then(() => {
           minTurnSilenceMs: s.stt.endpointingMs,
           maxTurnSilenceMs: s.stt.utteranceEndMs
         })
-      : new DeepgramProvider({
+      case 'openrouter':
+        return new OpenRouterSttProvider(chunked)
+      case 'groq':
+        return new GroqSttProvider(chunked)
+      default:
+        return new DeepgramProvider({
           apiKey,
           label: source,
           model: s.stt.model,
@@ -448,16 +460,31 @@ app.whenReady().then(() => {
           endpointingMs: s.stt.endpointingMs,
           utteranceEndMs: s.stt.utteranceEndMs
         })
+    }
+  }
+  const createStt = (source: string, _apiKey: string, s: Settings): SttProvider =>
+    new FallbackSttProvider(
+      sttChain(s).map((id) => ({
+        id,
+        label: STT_PROVIDER_LABELS[id],
+        create: () => createSttFor(id, source, settings.getApiKey(id) ?? '', s)
+      })),
+      { onActive: (id) => activeStt.set(source, id as SttProviderId) }
+    )
   const audioDeps = {
     getSettings: () => settings.get(),
-    getSttApiKey: () => settings.getApiKey(settings.get().stt.provider),
+    getSttApiKey: () => {
+      const id = sttChain(settings.get())[0]
+      return id ? settings.getApiKey(id) : null
+    },
     createStt,
     startCapture: (payload: Parameters<typeof send>[2]) => send(captureWindow, IPC.captureStart, payload),
     stopCapture: () => send(captureWindow, IPC.captureStop),
     setMic: (payload: Parameters<typeof send>[2]) => send(captureWindow, IPC.captureMic, payload),
-    onAudioSent: (_source: string, seconds: number) => {
+    onAudioSent: (source: string, seconds: number) => {
       const s = settings.get()
-      if (history.currentId()) cost.addStt(s.stt.provider, sttModel(s), seconds)
+      const id = activeStt.get(source) ?? s.stt.provider
+      if (history.currentId()) cost.addStt(id, splitModels(sttModel(s, id))[0] ?? '', seconds)
     },
     getCost: () => cost.total()
   }
@@ -849,6 +876,12 @@ app.whenReady().then(() => {
     if (practiceAudio.isActive()) void practiceAudio.stop({ error: 'Audio capture crashed — record the answer again.' })
   })
   watchRenderer(overlayWindow, 'overlay')
+  // Closing the overlay (Alt+F4) only hides it; Ctrl+Shift+H brings it back. Quit is explicit.
+  overlayWindow.on('close', (e) => {
+    if (quitting) return
+    e.preventDefault()
+    overlayWindow?.hide()
+  })
 
   // System tray icon disabled (controls available via overlay header and Ctrl+Shift+O / Ctrl+Shift+Q)
 

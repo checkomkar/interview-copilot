@@ -4,7 +4,7 @@
     "llm: per 1M tokens, keyed by provider, then by the model ID the API reports. '*' matches any characters; the most specific match wins. Keys starting with '_' are ignored.",
     "OpenRouter reports each request's cost itself; those figures are used instead of this table.",
     "Groq and Gemini are priced at $0 because their free tiers cost nothing. On a paid plan, replace '*' with your plan's prices (Gemini's paid list prices are kept under '_paid').",
-    "stt: per minute of audio streamed (each lane — interviewer and mic — is billed separately). AssemblyAI bills the time the connection is open; audio streams continuously, so it is the same.",
+    "stt: per minute of audio streamed (each lane — interviewer and mic — is billed separately). AssemblyAI bills the time the connection is open; audio streams continuously, so it is the same. OpenRouter and Groq bill only the phrases sent (speech), so their figures here are an upper bound. Groq is $0 on its free tier.",
     "Prices as of 2026-10; check the providers' pricing pages."
   ],
   "stt": {
@@ -14,6 +14,15 @@
     "assemblyai": {
       "universal-3*": { "perMinute": 0.0075 },
       "*": { "perMinute": 0.0025 }
+    },
+    "openrouter": {
+      "openai/whisper-large-v3-turbo": { "perMinute": 0.0002 },
+      "openai/whisper-large-v3": { "perMinute": 0.00045 },
+      "openai/gpt-4o-mini-transcribe": { "perMinute": 0.003 },
+      "*": { "perMinute": 0.006 }
+    },
+    "groq": {
+      "*": { "perMinute": 0 }
     }
   },
   "llm": {

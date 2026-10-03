@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS, mergeSettings } from '@shared/settings'
 import { modelOptions } from '../src/main/services/llm/AnthropicProvider'
 import {
   answerMaxTokens,
+  asksForDiagram,
   buildAnswerMessages,
   buildAnswerSystem,
   buildClassifierMessages,
@@ -194,5 +195,35 @@ describe('follow-up context', () => {
   it('tells the model to answer follow-ups in detail, and gives them the long budget', () => {
     expect(buildAnswerSystem(profile, DEFAULT_SETTINGS)[0].text).toContain('Never answer a follow-up generically')
     expect(answerMaxTokens('technical', 'auto', DEFAULT_SETTINGS, false, true)).toBe(DEFAULT_SETTINGS.llm.maxTokensCoding)
+  })
+})
+
+describe('diagrams', () => {
+  const user = (question: string, opts: { diagrams?: boolean; type?: 'technical' | 'coding' | 'system_design' } = {}) =>
+    buildAnswerMessages({ question, type: opts.type ?? 'technical', style: 'auto', transcript: [], diagrams: opts.diagrams })[0].content as string
+
+  it('spots requests to draw something', () => {
+    expect(asksForDiagram('Can you draw a sequence diagram for the OAuth login?')).toBe(true)
+    expect(asksForDiagram('Sketch the architecture on the whiteboard')).toBe(true)
+    expect(asksForDiagram('What is a withdrawal limit?')).toBe(false)
+    expect(asksForDiagram('How does a hash map work?')).toBe(false)
+  })
+
+  it('asks for a Mermaid diagram first when the interviewer asks to draw', () => {
+    expect(user('Draw the architecture of your last project')).toContain('Mermaid diagram first')
+    expect(user('Draw the architecture of your last project', { diagrams: false })).not.toContain('Mermaid')
+    // Coding answers keep their own steps.
+    expect(user('Draw the recursion tree and code it', { type: 'coding' })).not.toContain('Mermaid diagram first')
+  })
+
+  it('adds the diagram rule to the system prompt only when enabled', () => {
+    const text = (s = DEFAULT_SETTINGS) => buildAnswerSystem(EMPTY_PROFILE, s)[0].text
+    expect(text()).toContain('```mermaid')
+    expect(text(mergeSettings(DEFAULT_SETTINGS, { llm: { diagrams: false } }))).not.toContain('mermaid')
+  })
+
+  it('gives drawing requests the long token budget', () => {
+    expect(answerMaxTokens('technical', 'auto', DEFAULT_SETTINGS, false, false, 'Draw a sequence diagram of checkout')).toBe(3000)
+    expect(answerMaxTokens('technical', 'auto', DEFAULT_SETTINGS, false, false, 'What is CAP?')).toBe(600)
   })
 })

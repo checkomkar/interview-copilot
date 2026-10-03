@@ -72,7 +72,7 @@ export class AnswerService {
       purpose: 'answer',
       system,
       messages,
-      maxTokens: answerMaxTokens(req.type, req.style, settings, Boolean(req.images?.length), Boolean(req.earlier?.length)),
+      maxTokens: answerMaxTokens(req.type, req.style, settings, Boolean(req.images?.length), Boolean(req.earlier?.length), req.question),
       signal: req.signal
     }
     const { answerModel, fastModel, visionModel } = activeModels(settings)
@@ -127,7 +127,7 @@ export class AnswerService {
     if (req.type !== 'status' && req.type !== 'work') {
       return {
         system: buildAnswerSystem(profile, settings),
-        messages: buildAnswerMessages({ ...req, stepwise: settings.llm.codingAnswer === 'stepwise' })
+        messages: buildAnswerMessages({ ...req, stepwise: settings.llm.codingAnswer === 'stepwise', diagrams: settings.llm.diagrams })
       }
     }
     const now = (this.deps.now ?? Date.now)()

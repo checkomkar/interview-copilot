@@ -61,7 +61,7 @@ ${
   in ${lang} with brief comments.`
   }
 - System design: requirements → components → data flow → trade-offs.
-- If a screenshot is attached, use it as the primary source for the
+${settings.llm.diagrams ? `${DIAGRAM_RULE}\n` : ''}- If a screenshot is attached, use it as the primary source for the
   problem statement.
 - If the transcript is garbled, answer the most likely intended question
   and show your interpretation in one italic line at the top.
@@ -73,6 +73,25 @@ ${
 
   return [{ text, cache: true }]
 }
+
+/** Mermaid diagrams, drawn by the overlay (FR-G12). */
+const DIAGRAM_RULE = `- Diagrams: for system design, and whenever I'm asked to draw, sketch
+  or diagram something, include ONE Mermaid diagram in a \`\`\`mermaid
+  block — \`flowchart LR\` for architecture and data flow,
+  \`sequenceDiagram\` for request/message flows, \`erDiagram\` for
+  schemas, \`classDiagram\` or \`stateDiagram-v2\` when they fit. At most
+  ~10 nodes, short labels (quote labels with punctuation, e.g.
+  A["API Gateway (REST)"]), no styling, classDef, notes or HTML. It must
+  be valid Mermaid: I redraw it from the overlay while talking.`
+
+/** The interviewer asked to draw something (architecture, sequence, flow, schema). */
+const DRAW_RE = /\b(draw|drawing|sketch|diagram|whiteboard|flow ?chart|uml|er model)\b/i
+
+export function asksForDiagram(question: string): boolean {
+  return DRAW_RE.test(question)
+}
+
+const DRAW_STYLE = 'They asked me to draw it: the Mermaid diagram first, then 3–5 bullets walking through it in the order I would draw it.'
 
 const STYLE: Record<QuestionType, string> = {
   behavioral: 'STAR bullets: one each for **S**ituation, **T**ask, **A**ction, **R**esult.',
@@ -145,13 +164,16 @@ export function buildAnswerMessages(opts: {
   stepwise?: boolean
   /** Earlier Q&As of this session, oldest first, so follow-ups have context. */
   earlier?: EarlierQa[]
+  /** Mermaid diagrams on (settings.llm.diagrams). Default on. */
+  diagrams?: boolean
 }): LlmMessage[] {
   const images = opts.images ?? []
   const stepwise = opts.stepwise ?? true
   const shorter = opts.style === 'shorter'
   // Step-by-step applies to coding questions, and to screenshots that turn out to be coding problems.
   const codingSteps = stepwise && opts.type === 'coding'
-  const style = codingSteps ? (shorter ? SHORTER_CODING : STEPWISE_CODING) : STYLE[opts.type]
+  const draw = (opts.diagrams ?? true) && !codingSteps && asksForDiagram(opts.question)
+  const style = codingSteps ? (shorter ? SHORTER_CODING : STEPWISE_CODING) : draw ? DRAW_STYLE : STYLE[opts.type]
   const shorterNote = shorter && !codingSteps ? `\n${SHORTER}` : ''
   const screenNote = images.length ? `\n${screenshotNote(images.length, codingSteps ? '' : codingFromScreen(stepwise && !shorter))}` : ''
   const transcript = formatTranscript(opts.transcript)
@@ -181,8 +203,9 @@ Answer style: ${style}${screenNote}${followUpNote}${shorterNote}`
  * Screenshots are usually coding problems or diagrams, and follow-ups (`withEarlier`: there are
  * earlier Q&As) need detailed answers, so both get the long budget.
  */
-export function answerMaxTokens(type: QuestionType, style: AnswerStyle, settings: Settings, withImage = false, withEarlier = false): number {
-  const long = withImage || withEarlier || type === 'coding' || type === 'system_design'
+export function answerMaxTokens(type: QuestionType, style: AnswerStyle, settings: Settings, withImage = false, withEarlier = false, question = ''): number {
+  const diagram = settings.llm.diagrams && asksForDiagram(question)
+  const long = withImage || withEarlier || diagram || type === 'coding' || type === 'system_design'
   const base = long ? settings.llm.maxTokensCoding : settings.llm.maxTokens
   return style === 'shorter' ? Math.max(100, Math.ceil(base / 2)) : base
 }

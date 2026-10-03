@@ -13,6 +13,8 @@ const BUFFER_SECONDS = 5
 const KEEPALIVE_INTERVAL_MS = 3000
 const KEEPALIVE_AFTER_IDLE_MS = 5000
 const CLOSE_TIMEOUT_MS = 1500
+/** A network that silently drops the connection fails here instead of hanging (then retries). */
+const HANDSHAKE_TIMEOUT_MS = 8000
 
 export interface SocketSttOptions {
   sampleRate?: number
@@ -131,8 +133,9 @@ export abstract class SocketSttProvider extends BaseSttProvider {
   }
 
   private connect(): void {
-    this.emit('state', this.retries === 0 ? 'connecting' : 'reconnecting')
-    const ws = new WebSocket(this.url(), { headers: this.headers() })
+    // Retries already reported 'reconnecting' when they were scheduled.
+    if (this.retries === 0) this.emit('state', 'connecting')
+    const ws = new WebSocket(this.url(), { headers: this.headers(), handshakeTimeout: HANDSHAKE_TIMEOUT_MS })
     this.ws = ws
     this.bytesSentThisConn = 0
 

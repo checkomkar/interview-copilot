@@ -14,7 +14,8 @@ import {
   type HotkeyAction,
   type LlmProviderId,
   type ReasoningEffort,
-  type Settings
+  type Settings,
+  type SttProviderId
 } from '@shared/settings'
 import { useApp } from '../store'
 
@@ -119,8 +120,8 @@ function ApiKeysSection() {
       <ApiKeyRow provider="deepgram" label="Deepgram" hint="Speech-to-text · console.deepgram.com" isSet={keys?.deepgram ?? false} />
       <ApiKeyRow provider="assemblyai" label="AssemblyAI" hint="Speech-to-text · assemblyai.com/dashboard" isSet={keys?.assemblyai ?? false} />
       <ApiKeyRow provider="anthropic" label="Anthropic" hint="Paid · console.anthropic.com" isSet={keys?.anthropic ?? false} />
-      <ApiKeyRow provider="openrouter" label="OpenRouter" hint="Free models · openrouter.ai/keys" isSet={keys?.openrouter ?? false} />
-      <ApiKeyRow provider="groq" label="Groq" hint="Free tier · console.groq.com/keys" isSet={keys?.groq ?? false} />
+      <ApiKeyRow provider="openrouter" label="OpenRouter" hint="Answers and speech-to-text · openrouter.ai/keys" isSet={keys?.openrouter ?? false} />
+      <ApiKeyRow provider="groq" label="Groq" hint="Free tier · answers and speech-to-text · console.groq.com/keys" isSet={keys?.groq ?? false} />
       <ApiKeyRow provider="gemini" label="Google Gemini" hint="Free tier · aistudio.google.com/apikey" isSet={keys?.gemini ?? false} />
     </Section>
   )
@@ -240,36 +241,80 @@ function AudioSection({ settings }: { settings: Settings }) {
   )
 }
 
+const STT_HINTS: Record<SttProviderId, string> = {
+  deepgram: 'Streaming · Nova-3: ~$0.46/hour',
+  assemblyai: 'Streaming · Universal-Streaming: ~$0.15/hour',
+  openrouter: 'Per phrase, after a pause (slower) · Whisper Turbo: ~$0.01/hour of speech',
+  groq: 'Per phrase, after a pause (slower) · free tier: 8 hours/day'
+}
+
+const STT_MODEL_FIELDS: Record<SttProviderId, { key: 'model' | 'assemblyaiModel' | 'openrouterModel' | 'groqModel'; hint?: string }> = {
+  deepgram: { key: 'model' },
+  assemblyai: { key: 'assemblyaiModel', hint: 'universal-streaming-english, universal-streaming-multilingual or universal-3-6-pro' },
+  openrouter: { key: 'openrouterModel', hint: 'Tried in order, e.g. openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe' },
+  groq: { key: 'groqModel', hint: 'Tried in order: whisper-large-v3-turbo, whisper-large-v3' }
+}
+
 function SttSection({ settings }: { settings: Settings }) {
   const update = useApp((s) => s.updateSettings)
+  const keys = useApp((s) => s.keys)
   const stt = settings.stt
+  const fallbacks = stt.fallbackProviders.filter((p) => p !== stt.provider)
+  const toggleFallback = (id: SttProviderId, on: boolean) => {
+    const next = on ? [...fallbacks, id] : fallbacks.filter((p) => p !== id)
+    // Keep the listed order so failover is predictable.
+    void update({ stt: { fallbackProviders: STT_PROVIDERS.filter((p) => next.includes(p)) } })
+  }
+  // Model fields for the main provider and the backups in use.
+  const shown = [stt.provider, ...fallbacks]
   return (
-    <Section title="Speech-to-text" description="Streaming transcription for the interviewer, your mic and practice answers. Changes apply to the next session.">
-      <Row label="Provider" hint={stt.provider === 'assemblyai' ? 'Universal-Streaming: ~$0.15/hour' : 'Nova-3: ~$0.46/hour'}>
-        <select className={inputCls} value={stt.provider} onChange={(e) => void update({ stt: { provider: e.target.value as Settings['stt']['provider'] } })}>
-          {STT_PROVIDERS.map((p) => (
-            <option key={p} value={p}>
-              {STT_PROVIDER_LABELS[p]}
-            </option>
-          ))}
-        </select>
+    <Section
+      title="Speech-to-text"
+      description="Transcription for the interviewer, your mic and practice answers. If the main provider can't connect or fails, the backups take over in order. Changes apply to the next session."
+    >
+      <Row label="Main provider" hint={STT_HINTS[stt.provider]}>
+        <div className="flex items-center gap-3">
+          <select className={inputCls} value={stt.provider} onChange={(e) => void update({ stt: { provider: e.target.value as SttProviderId } })}>
+            {STT_PROVIDERS.map((p) => (
+              <option key={p} value={p}>
+                {STT_PROVIDER_LABELS[p]}
+              </option>
+            ))}
+          </select>
+          {keys && !keys[stt.provider] && <span className="shrink-0 text-[11px] text-warn">No API key</span>}
+        </div>
       </Row>
-      {stt.provider === 'assemblyai' ? (
-        <Row label="Model" hint="universal-streaming-english, universal-streaming-multilingual or universal-3-6-pro">
-          <TextSetting value={stt.assemblyaiModel} onCommit={(assemblyaiModel) => void update({ stt: { assemblyaiModel } })} />
-        </Row>
-      ) : (
-        <Row label="Model">
-          <TextSetting value={stt.model} onCommit={(model) => void update({ stt: { model } })} />
-        </Row>
-      )}
+      {/* Not a <Row>: a <label> would forward clicks on its text to the first checkbox. */}
+      <div className="grid grid-cols-[200px_1fr] items-start gap-4">
+        <span className="text-sm">
+          Backup providers
+          <span className="block text-[11px] text-muted">Tried in this order; only those with a key</span>
+        </span>
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {STT_PROVIDERS.filter((p) => p !== stt.provider).map((p) => (
+            <label key={p} className="flex cursor-pointer items-center gap-2 text-sm select-none">
+              <input type="checkbox" className="size-4 accent-accent" checked={fallbacks.includes(p)} onChange={(e) => toggleFallback(p, e.target.checked)} />
+              {STT_PROVIDER_LABELS[p]}
+              {keys && !keys[p] && <span className="text-[11px] text-muted">(no key)</span>}
+            </label>
+          ))}
+        </div>
+      </div>
+      {shown.map((p) => {
+        const field = STT_MODEL_FIELDS[p]
+        return (
+          <Row key={p} label={`${STT_PROVIDER_LABELS[p]} model`} hint={field.hint}>
+            <TextSetting value={stt[field.key]} onCommit={(v) => void update({ stt: { [field.key]: v } })} />
+          </Row>
+        )
+      })}
       <Row label="Language">
         <TextSetting value={stt.language} onCommit={(language) => void update({ stt: { language } })} />
       </Row>
       <Row label="Endpointing (ms)" hint="Pause that finalizes a phrase">
         <NumberSetting value={stt.endpointingMs} onCommit={(endpointingMs) => void update({ stt: { endpointingMs } })} />
       </Row>
-      <Row label="Utterance end (ms)" hint="Silence that ends an utterance (≥ 1000)">
+      <Row label="Utterance end (ms)" hint="Silence that ends an utterance (≥ 1000); OpenRouter and Groq send a phrase after this pause">
         <NumberSetting value={stt.utteranceEndMs} onCommit={(utteranceEndMs) => void update({ stt: { utteranceEndMs } })} />
       </Row>
     </Section>
@@ -354,6 +399,14 @@ function LlmSection({ settings }: { settings: Settings }) {
           <option value="stepwise">Step by step: pseudocode → brute force → optimal</option>
           <option value="direct">Optimal only: approach, complexity, code</option>
         </select>
+      </Row>
+      <Row label="Diagrams" hint="System design, and questions asking to draw something, get a diagram in the overlay">
+        <input
+          type="checkbox"
+          className="size-4 justify-self-start accent-accent"
+          checked={llm.diagrams}
+          onChange={(e) => void update({ llm: { diagrams: e.target.checked } })}
+        />
       </Row>
       <Row label="Preferred language" hint="For coding answers">
         <TextSetting value={settings.preferredLanguage} onCommit={(preferredLanguage) => void update({ preferredLanguage })} />
