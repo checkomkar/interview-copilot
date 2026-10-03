@@ -133,3 +133,54 @@
 .hljs-params {
   color: var(--hl-type);
 }
+
+/* Mermaid diagrams (FR-G12) */
+.md-diagram,
+.md-diagram-code {
+  position: relative;
+  margin: 0.5em 0;
+}
+.md-diagram {
+  border: 1px solid var(--ov-line);
+  border-radius: 8px;
+  padding: 0.6em;
+  overflow-x: auto;
+}
+.md-diagram-svg svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.md-diagram-pending {
+  color: var(--ov-muted);
+  font-size: 0.85em;
+}
+.md-diagram-pending.md-diagram {
+  animation: md-pulse 1.4s ease-in-out infinite;
+}
+@keyframes md-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+.md-diagram-toggle {
+  position: absolute;
+  top: 0.35em;
+  right: 0.45em;
+  font-size: 0.72em;
+  color: var(--ov-muted);
+  background: var(--ov-code-bg);
+  border: 1px solid var(--ov-line);
+  border-radius: 4px;
+  padding: 0 0.4em;
+  cursor: pointer;
+}
+.md-diagram-toggle:hover {
+  color: var(--ov-fg);
+}
+.md-diagram-note {
+  display: block;
+  color: var(--ov-muted);
+  font-size: 0.75em;
+}

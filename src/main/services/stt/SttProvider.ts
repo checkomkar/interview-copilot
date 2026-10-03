@@ -23,6 +23,14 @@ export interface SttEvents {
   latency: [number]
   /** `fatal` means the provider gave up and must be restarted. */
   error: [Error, boolean]
+  /** A fallback provider took over from one that failed. */
+  fallback: [SttFallback]
+}
+
+export interface SttFallback {
+  from: string
+  to: string
+  reason: string
 }
 
 /** Pluggable streaming STT provider (FR-S1). */

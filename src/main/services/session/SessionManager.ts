@@ -29,6 +29,7 @@ const RECONNECT_NOTICE_AFTER = 3
 
 export interface SessionDeps {
   getSettings: () => Settings
+  /** A key for the first usable STT provider (main or backup); null blocks the session. */
   getSttApiKey: () => string | null
   /**
    * Which lanes a session opens. Default: system audio, plus the mic when the "Me" transcript
@@ -105,7 +106,7 @@ export class SessionManager extends EventEmitter {
     const apiKey = this.deps.getSttApiKey()
     const settings = this.deps.getSettings()
     if (!apiKey) {
-      return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key in Settings to start a session.`, navigate: 'settings' }
+      return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key (or one for a backup speech provider) in Settings to start a session.`, navigate: 'settings' }
     }
     const sources: AudioSource[] = this.deps.sources?.(settings) ?? (settings.audio.micEnabled ? ['loopback', 'mic'] : ['loopback'])
     const accessError = this.deps.checkAccess?.(sources)
@@ -267,6 +268,9 @@ export class SessionManager extends EventEmitter {
         }
         this.setState({ ...this.state, status: 'reconnecting', message: 'Reconnecting to speech service…' })
       }
+    })
+    stt.on('fallback', (f) => {
+      if (current() && source === this.primary) this.emit('notice', `${f.from} failed (${f.reason}) — switched to ${f.to}.`)
     })
     stt.on('error', (err, fatal) => {
       if (!current()) return

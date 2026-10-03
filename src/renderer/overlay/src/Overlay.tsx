@@ -369,15 +369,10 @@ export function Overlay() {
 					>
 						⚙
 					</IconButton>
+					<QuitButton />
 					<IconButton
-						label={keys("Hide overlay (Ctrl+Shift+H)")}
+						label="Hide overlay — Cue keeps running (Ctrl+Shift+H to show)"
 						onClick={() => void window.api.ui.toggleOverlay()}
-					>
-						−
-					</IconButton>
-					<IconButton
-						label={keys("Quit Cue (Ctrl+Shift+Q)")}
-						onClick={() => void window.api.ui.quit()}
 					>
 						✕
 					</IconButton>
@@ -520,7 +515,9 @@ function QaView({
 				{qa.status === "thinking" ? (
 					<p className="ov-muted animate-pulse">Thinking…</p>
 				) : (
-					qa.answer && <Markdown text={qa.answer} />
+					qa.answer && (
+						<Markdown text={qa.answer} streaming={qa.status === "streaming"} />
+					)
 				)}
 				{qa.status === "error" && (
 					<p
@@ -633,6 +630,26 @@ function IconButton({
 			aria-pressed={pressed}
 		>
 			{children}
+		</button>
+	);
+}
+
+/** Quitting ends a running session, so it takes a second click within a few seconds. */
+function QuitButton() {
+	const [armed, setArmed] = useState(false);
+	useEffect(() => {
+		if (!armed) return;
+		const t = setTimeout(() => setArmed(false), 3000);
+		return () => clearTimeout(t);
+	}, [armed]);
+	return (
+		<button
+			className={`ov-btn rounded px-1.5 text-sm leading-5 ${armed ? "ov-quit-armed" : "ov-muted"}`}
+			onClick={() => (armed ? void window.api.ui.quit() : setArmed(true))}
+			title={armed ? "Click again to quit Cue" : "Quit Cue (Ctrl+Shift+Q)"}
+			aria-label={armed ? "Click again to quit Cue" : "Quit Cue"}
+		>
+			{armed ? "Quit?" : "⏻"}
 		</button>
 	);
 }
