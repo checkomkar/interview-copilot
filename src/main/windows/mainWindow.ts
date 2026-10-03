@@ -20,7 +20,7 @@ export function createMainWindow(): BrowserWindow {
 	win.once("ready-to-show", () => {
 		win.show();
 		setTimeout(() => {
-			if (!win.isDestroyed()) win.setContentProtection(true);
+			//if (!win.isDestroyed()) win.setContentProtection(true);
 		}, 100);
 	});
 	// Re-apply protection whenever the main window is opened or un-minimized

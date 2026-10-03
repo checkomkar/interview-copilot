@@ -11,6 +11,7 @@ import type {
 } from "@shared/ipc";
 import { APP_MODE_LABELS, type Settings } from "@shared/settings";
 import { PROJECT_STATUS_LABELS, type WorkPick } from "@shared/work";
+import { keys } from "../../shared/keys";
 import { Markdown } from "../../shared/Markdown";
 import { AskBar } from "./AskBar";
 
@@ -300,7 +301,7 @@ export function Overlay() {
 				{qas.length > 0 && (
 					<div className="no-drag ml-2 flex items-center gap-0.5">
 						<IconButton
-							label="Previous answer (Ctrl+Shift+←)"
+							label={keys("Previous answer (Ctrl+Shift+←)")}
 							disabled={viewIndex <= 0}
 							onClick={() => dispatch({ type: "nav", dir: "prev" })}
 						>
@@ -310,7 +311,7 @@ export function Overlay() {
 							{viewIndex + 1}/{qas.length}
 						</span>
 						<IconButton
-							label="Next answer (Ctrl+Shift+→)"
+							label={keys("Next answer (Ctrl+Shift+→)")}
 							disabled={viewIndex >= qas.length - 1}
 							onClick={() => dispatch({ type: "nav", dir: "next" })}
 						>
@@ -333,14 +334,14 @@ export function Overlay() {
 				<div className="no-drag ml-auto flex items-center gap-0.5">
 					{mode === "work" ? (
 						<TextButton
-							label="Status update — pick a project (Ctrl+Shift+Space)"
+							label={keys("Status update — pick a project (Ctrl+Shift+Space)")}
 							onClick={() => void act(window.api.answers.now)}
 						>
 							Status
 						</TextButton>
 					) : (
 						<TextButton
-							label="Answer the last thing heard now (Ctrl+Shift+Space)"
+							label={keys("Answer the last thing heard now (Ctrl+Shift+Space)")}
 							onClick={() => void act(window.api.answers.now)}
 						>
 							Answer
@@ -349,13 +350,13 @@ export function Overlay() {
 					{qas.length > 0 && (
 						<>
 							<TextButton
-								label="Regenerate (Ctrl+Shift+R)"
+								label={keys("Regenerate (Ctrl+Shift+R)")}
 								onClick={() => void act(window.api.answers.regenerate)}
 							>
 								Retry
 							</TextButton>
 							<TextButton
-								label="Shorter (Ctrl+Shift+D)"
+								label={keys("Shorter (Ctrl+Shift+D)")}
 								onClick={() => void act(window.api.answers.shorter)}
 							>
 								Shorter
@@ -363,19 +364,19 @@ export function Overlay() {
 						</>
 					)}
 					<IconButton
-						label="Open dashboard (Ctrl+Shift+O)"
+						label={keys("Open dashboard (Ctrl+Shift+O)")}
 						onClick={() => void window.api.ui.toggleMain()}
 					>
 						⚙
 					</IconButton>
 					<IconButton
-						label="Hide overlay (Ctrl+Shift+H)"
+						label={keys("Hide overlay (Ctrl+Shift+H)")}
 						onClick={() => void window.api.ui.toggleOverlay()}
 					>
 						−
 					</IconButton>
 					<IconButton
-						label="Quit Cue (Ctrl+Shift+Q)"
+						label={keys("Quit Cue (Ctrl+Shift+Q)")}
 						onClick={() => void window.api.ui.quit()}
 					>
 						✕
@@ -452,7 +453,7 @@ export function Overlay() {
 			<footer className="ov-line ov-muted flex items-center gap-3 border-t px-3 py-1 font-mono text-[11px] tabular-nums">
 				<span className="min-w-0 flex-1 truncate">{session.hint ?? ""}</span>
 				{!autoAnswer && (
-					<span title="Auto-answer is off (Ctrl+Shift+A)">auto off</span>
+					<span title={keys("Auto-answer is off (Ctrl+Shift+A)")}>auto off</span>
 				)}
 				<span
 					className={

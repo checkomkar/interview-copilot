@@ -174,6 +174,14 @@ const compatProvider = (
 		.prefault({});
 
 // `prefault({})` parses the empty object so nested field defaults are applied.
+/** Deepgram streaming regions. Some networks reach one far more reliably than the other. */
+export const DEEPGRAM_REGIONS = ["us", "eu"] as const;
+export type DeepgramRegion = (typeof DEEPGRAM_REGIONS)[number];
+export const DEEPGRAM_REGION_LABELS: Record<DeepgramRegion, string> = {
+	us: "US (api.deepgram.com)",
+	eu: "EU (api.eu.deepgram.com)",
+};
+
 export const SettingsSchema = z.object({
 	/** Chosen on the Session tab before a session starts; locked while one runs. */
 	mode: z.enum(APP_MODES).default("work"),
@@ -182,6 +190,8 @@ export const SettingsSchema = z.object({
 			provider: z.enum(STT_PROVIDERS).default("deepgram"),
 			/** Deepgram model. */
 			model: z.string().min(1).default("nova-3"),
+			/** Deepgram endpoint region. */
+			deepgramRegion: z.enum(DEEPGRAM_REGIONS).default("us"),
 			/** AssemblyAI streaming model (`universal-streaming-english` is the cheapest and fastest). */
 			assemblyaiModel: z.string().min(1).default("universal-streaming-english"),
 			language: z.string().min(1).default("en"),

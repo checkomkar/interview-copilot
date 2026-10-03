@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { servedBy } from '@shared/ipc'
+import { shortcutText } from '@shared/keys'
 import type {
   AnswerActionResult,
   AudioSource,
@@ -611,7 +612,7 @@ export class CopilotService extends EventEmitter {
     } catch (err) {
       if (controller.signal.aborted || (err instanceof LlmError && err.kind === 'aborted')) return
       const partial = err instanceof PartialAnswerError
-      const retry = this.deps.getSettings().hotkeys.regenerate.replace(/CommandOrControl|CmdOrCtrl/g, 'Ctrl')
+      const retry = shortcutText(this.deps.getSettings().hotkeys.regenerate.replace(/CommandOrControl|CmdOrCtrl/g, 'Ctrl'), process.platform)
       const message = partial ? `⚠ incomplete — ${retry} to retry` : err instanceof Error ? err.message : String(err)
       log.warn(`answer ${qa.id} failed: ${err instanceof Error ? err.message : String(err)}`)
       qa.status = 'error'

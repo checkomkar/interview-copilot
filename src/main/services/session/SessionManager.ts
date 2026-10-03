@@ -44,6 +44,8 @@ export interface SessionDeps {
   onAudioSent?: (source: AudioSource, seconds: number) => void
   /** Running session cost for the session state. */
   getCost?: () => number
+  /** OS privacy check for these lanes (macOS); a message blocks the start. */
+  checkAccess?: (sources: AudioSource[]) => string | null
   now?: () => number
 }
 
@@ -106,6 +108,8 @@ export class SessionManager extends EventEmitter {
       return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key in Settings to start a session.`, navigate: 'settings' }
     }
     const sources: AudioSource[] = this.deps.sources?.(settings) ?? (settings.audio.micEnabled ? ['loopback', 'mic'] : ['loopback'])
+    const accessError = this.deps.checkAccess?.(sources)
+    if (accessError) return { ok: false, error: accessError }
     this.primary = sources[0]
     this.reconnects = 0
 
@@ -133,6 +137,8 @@ export class SessionManager extends EventEmitter {
     if (on && !this.lanes.has('mic')) {
       const apiKey = this.deps.getSttApiKey()
       if (!apiKey) return { ok: false, error: `Add your ${STT_PROVIDER_LABELS[settings.stt.provider]} API key in Settings.`, navigate: 'settings' }
+      const accessError = this.deps.checkAccess?.(['mic'])
+      if (accessError) return { ok: false, error: accessError }
       this.openLane('mic', apiKey, settings)
       this.deps.setMic({ on: true, deviceId: settings.audio.micDeviceId })
       this.micForVoiceOnly = true

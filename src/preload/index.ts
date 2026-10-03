@@ -166,6 +166,8 @@ const api = {
     syncNow: (): Promise<TeamsStatus> => ipcRenderer.invoke(IPC.teamsSyncNow)
   },
   app: {
+    /** process.platform, for platform-specific text (shortcut symbols on macOS). */
+    platform: process.platform,
     info: (): Promise<{ version: string; dataDir: string }> => ipcRenderer.invoke(IPC.appInfo),
     /** Asks for confirmation, wipes history, profile, settings and keys, then restarts the app. */
     deleteAllData: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.appDeleteAllData),

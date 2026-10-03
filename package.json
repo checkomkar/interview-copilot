@@ -2,7 +2,7 @@
   "name": "cue",
   "productName": "Cue",
   "version": "1.0.0",
-  "description": "Personal real-time call assistant for Windows (Work and Interview modes)",
+  "description": "Personal real-time call assistant for Windows and macOS (Work and Interview modes)",
   "author": "Omkar",
   "private": true,
   "main": "./out/main/index.js",
@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dist": "npm run build && electron-builder --win nsis --x64",
+    "dist:mac": "npm run build && electron-builder --mac",
     "icon": "node scripts/make-icon.mjs",
     "mock-teams": "node scripts/mock-teams.mjs"
   },
@@ -47,6 +48,35 @@
       ],
       "icon": "build/icon.png"
     },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon-mac.png",
+      "category": "public.app-category.productivity",
+      "minimumSystemVersion": "13.0",
+      "identity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Cue transcribes your microphone for the \"Me\" transcript, voice questions and Practice.",
+        "NSAudioCaptureUsageDescription": "Cue transcribes call audio from other apps to answer questions."
+      }
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -56,6 +86,9 @@
       "uninstallDisplayName": "Cue",
       "deleteAppDataOnUninstall": false,
       "artifactName": "Cue-Setup-${version}.exe"
+    },
+    "dmg": {
+      "artifactName": "Cue-${version}-${arch}.dmg"
     }
   },
   "dependencies": {

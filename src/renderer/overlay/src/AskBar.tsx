@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { keys } from '../../shared/keys'
 
 interface Props {
   mode: 'work' | 'interview'
@@ -94,7 +95,7 @@ export function AskBar({ mode, voiceOn, heard, pendingShots, maxShots, onError }
         <button
           onClick={() => void toggleVoice()}
           className={`flex size-7 shrink-0 items-center justify-center rounded-md ${voiceOn ? 'ov-mic-on' : 'ov-muted ov-btn'}`}
-          title={voiceOn ? 'Stop voice questions (Ctrl+Shift+M)' : 'Ask by voice (Ctrl+Shift+M)'}
+          title={keys(voiceOn ? 'Stop voice questions (Ctrl+Shift+M)' : 'Ask by voice (Ctrl+Shift+M)')}
           aria-label={voiceOn ? 'Stop voice questions' : 'Ask by voice'}
           aria-pressed={voiceOn}
         >
@@ -107,7 +108,7 @@ export function AskBar({ mode, voiceOn, heard, pendingShots, maxShots, onError }
           title={
             full
               ? `Up to ${maxShots} screenshots per question (Settings → Screen)`
-              : `Add a screenshot (Ctrl+Shift+Alt+S) — add up to ${maxShots} while scrolling, then Answer. Ctrl+Shift+S captures and answers at once.`
+              : keys(`Add a screenshot (Ctrl+Shift+Alt+S) — add up to ${maxShots} while scrolling, then Answer. Ctrl+Shift+S captures and answers at once.`)
           }
           aria-label="Add screenshot"
         >

@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings, upgradeSettings } from
 
 describe('settings schema', () => {
   it('produces PRD §8 defaults from an empty object', () => {
-    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000 })
+    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', deepgramRegion: 'us', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000 })
     expect(DEFAULT_SETTINGS.llm.answerModel).toBe('claude-sonnet-5-5')
     expect(DEFAULT_SETTINGS.llm.fastModel).toBe('claude-haiku-4-5-20251001')
     expect(DEFAULT_SETTINGS.detection).toEqual({ autoAnswer: true, minWords: 6, debounceMs: 2000, pauseGraceMs: 1500 })

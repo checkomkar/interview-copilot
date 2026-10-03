@@ -16,6 +16,7 @@ import {
   type TaskStatus
 } from '@shared/work'
 import { useApp } from '../store'
+import { keys } from '../../../shared/keys'
 import { ImportUpdates } from './ImportUpdates'
 
 const inputCls = 'w-full rounded-md border border-line bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent'
@@ -168,7 +169,7 @@ export function ProjectsTab() {
           )}
         </ul>
         <p className="border-t border-line px-4 py-3 text-[11px] leading-relaxed text-muted">
-          In a Work session, <span className="font-mono">Ctrl+Shift+Space</span> picks a project for a status update; questions like "where are we on
+          In a Work session, <span className="font-mono">{keys('Ctrl+Shift+Space')}</span> picks a project for a status update; questions like "where are we on
           X?" are spotted automatically.
         </p>
       </aside>
@@ -385,7 +386,7 @@ function UpdatesCard({ project, onError }: { project: Project; onError: (m: stri
         <button onClick={() => void add()} disabled={!text.trim() || busy} className="rounded-md border border-line px-3 py-1.5 text-sm hover:bg-raised disabled:opacity-40">
           Log update
         </button>
-        <span className="text-[11px] text-muted">Ctrl+Enter · in a call, type "update {project.name}: …" in the overlay</span>
+        <span className="text-[11px] text-muted">{keys('Ctrl+')}Enter · in a call, type "update {project.name}: …" in the overlay</span>
       </div>
       {project.updates.length > 0 && (
         <ol className="flex flex-col divide-y divide-line rounded-lg border border-line">

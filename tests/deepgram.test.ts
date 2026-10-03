@@ -53,4 +53,9 @@ describe('buildDeepgramUrl', () => {
     })
     expect(url.toString()).not.toContain('SECRET_KEY_123')
   })
+
+  it('uses the EU endpoint when that region is picked', () => {
+    const url = new URL(buildDeepgramUrl({ apiKey: 'k', model: 'nova-3', language: 'en', endpointingMs: 300, utteranceEndMs: 1000, region: 'eu' }))
+    expect(url.origin + url.pathname).toBe('wss://api.eu.deepgram.com/v1/listen')
+  })
 })

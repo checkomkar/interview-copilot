@@ -9,6 +9,7 @@ import { LlmError } from '../src/main/services/llm/LlmProvider'
 import { SessionManager } from '../src/main/services/session/SessionManager'
 import { BaseSttProvider } from '../src/main/services/stt/SttProvider'
 import { MockLlm } from './mockLlm'
+import { shortcutText } from '@shared/keys'
 
 /** Long enough for the classifier timeout and the debounce window; the keep-warm interval rules out runAllTimers. */
 const flush = () => vi.advanceTimersByTimeAsync(2500)
@@ -193,7 +194,7 @@ describe('CopilotService', () => {
     llm.push({ tokens: ['partial'], error: new LlmError('network', 'dropped') })
     copilot.onUtteranceEnd(utterance('What is a closure?'))
     await flush()
-    expect(errors[0]).toMatchObject({ partial: true, message: '⚠ incomplete — Ctrl+Shift+R to retry' })
+    expect(errors[0]).toMatchObject({ partial: true, message: `⚠ incomplete — ${shortcutText('Ctrl+Shift+R', process.platform)} to retry` })
     expect(copilot.list()[0]).toMatchObject({ answer: 'partial', status: 'error' })
   })
 

@@ -9,15 +9,25 @@ const log = createLogger('stt')
  * of up to 30 s resumes on its own (FR-S4, NFR reliability).
  */
 export const MAX_RETRIES = 8
-const BUFFER_SECONDS = 5
+/** Audio kept while (re)connecting; a slow handshake shouldn't lose the first question. */
+const BUFFER_SECONDS = 15
 const KEEPALIVE_INTERVAL_MS = 3000
 const KEEPALIVE_AFTER_IDLE_MS = 5000
 const CLOSE_TIMEOUT_MS = 1500
+/**
+ * A handshake that hasn't finished by now has stalled: give up and retry. Lossy routes can take
+ * 10–20 s through TCP retransmits and still succeed, so this is generous.
+ */
+const CONNECT_TIMEOUT_MS = 20_000
+/** An open socket whose send backlog hasn't drained at all for this long is dead. */
+const STALL_MS = 8000
 
 export interface SocketSttOptions {
   sampleRate?: number
   /** Label used in logs only. */
   label?: string
+  /** Override for tests. */
+  connectTimeoutMs?: number
 }
 
 /**
@@ -45,6 +55,10 @@ export abstract class SocketSttProvider extends BaseSttProvider {
   private retryTimer: NodeJS.Timeout | null = null
   private keepAliveTimer: NodeJS.Timeout | null = null
   private lastSendAt = 0
+  /** Stall detection: total bytes handed to the socket, and the backlog at the last check. */
+  private queuedTotal = 0
+  private lastCheck = { queued: 0, buffered: 0 }
+  private lastDrainAt = 0
   /** Bytes of audio sent on the current connection, for latency estimation. */
   protected bytesSentThisConn = 0
   private pending: Buffer[] = []
@@ -73,6 +87,7 @@ export abstract class SocketSttProvider extends BaseSttProvider {
     if (this.stopping) return
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(chunk)
+      this.queuedTotal += chunk.length
       this.bytesSentThisConn += chunk.length
       this.lastSendAt = Date.now()
       return
@@ -136,10 +151,21 @@ export abstract class SocketSttProvider extends BaseSttProvider {
     this.ws = ws
     this.bytesSentThisConn = 0
 
+    // Without this a stalled handshake never opens, errors or closes, so it is never retried.
+    const connectTimeoutMs = this.socketOpts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
+    const connectTimer = setTimeout(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.CONNECTING) return
+      log.warn(`[${this.tag}] not connected after ${connectTimeoutMs} ms; retrying`)
+      ws.terminate()
+    }, connectTimeoutMs)
+
     ws.on('open', () => {
+      clearTimeout(connectTimer)
       if (this.ws !== ws) return
       log.info(`[${this.tag}] connected`)
       this.retries = 0
+      this.lastCheck = { queued: this.queuedTotal, buffered: 0 }
+      this.lastDrainAt = Date.now()
       this.onOpen()
       this.emit('state', 'open')
       this.flushPending()
@@ -168,6 +194,7 @@ export abstract class SocketSttProvider extends BaseSttProvider {
     })
 
     ws.on('close', (code, reason) => {
+      clearTimeout(connectTimer)
       if (this.ws !== ws) return
       this.ws = null
       if (this.stopping) return
@@ -203,6 +230,7 @@ export abstract class SocketSttProvider extends BaseSttProvider {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     for (const chunk of this.pending) {
       ws.send(chunk)
+      this.queuedTotal += chunk.length
       this.bytesSentThisConn += chunk.length
     }
     this.pending = []
@@ -212,8 +240,22 @@ export abstract class SocketSttProvider extends BaseSttProvider {
 
   private keepAlive(): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return
+    // A dead connection that hasn't closed yet keeps accepting sends that never leave. A backlog
+    // that is merely draining slowly (e.g. the buffered audio flushed on connect) is fine.
+    const now = Date.now()
+    const buffered = this.ws.bufferedAmount
+    const drained = this.lastCheck.buffered + (this.queuedTotal - this.lastCheck.queued) - buffered
+    if (buffered === 0 || drained > 0) this.lastDrainAt = now
+    this.lastCheck = { queued: this.queuedTotal, buffered }
+    if (now - this.lastDrainAt >= STALL_MS) {
+      log.warn(`[${this.tag}] ${buffered} bytes unsent for ${now - this.lastDrainAt} ms; reconnecting`)
+      this.ws.terminate()
+      return
+    }
     if (Date.now() - this.lastSendAt < KEEPALIVE_AFTER_IDLE_MS) return
-    this.ws.send(this.keepAliveMessage())
+    const msg = this.keepAliveMessage()
+    this.ws.send(msg)
+    this.queuedTotal += Buffer.byteLength(msg)
     this.lastSendAt = Date.now()
   }
 

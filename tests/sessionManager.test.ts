@@ -21,7 +21,7 @@ class MockStt extends BaseSttProvider {
   }
 }
 
-function setup(opts: { apiKey?: string | null; settings?: Settings; onAudioSent?: (source: AudioSource, seconds: number) => void; getCost?: () => number } = {}) {
+function setup(opts: { apiKey?: string | null; settings?: Settings; onAudioSent?: (source: AudioSource, seconds: number) => void; getCost?: () => number; checkAccess?: (sources: AudioSource[]) => string | null } = {}) {
   const providers = new Map<AudioSource, MockStt>()
   const captureStart = vi.fn()
   const captureStop = vi.fn()
@@ -39,6 +39,7 @@ function setup(opts: { apiKey?: string | null; settings?: Settings; onAudioSent?
     setMic,
     onAudioSent: opts.onAudioSent,
     getCost: opts.getCost,
+    checkAccess: opts.checkAccess,
     now: () => Date.now()
   })
   const states: SessionState[] = []
@@ -59,6 +60,16 @@ describe('SessionManager', () => {
     expect(mgr.start()).toEqual({ ok: false, error: expect.stringContaining('Deepgram'), navigate: 'settings' })
     expect(captureStart).not.toHaveBeenCalled()
     expect(mgr.getState().status).toBe('idle')
+  })
+
+  it('blocks start when the OS refuses capture access (macOS privacy)', () => {
+    const checkAccess = vi.fn(() => 'macOS is blocking Cue')
+    const { mgr, captureStart, providers } = setup({ checkAccess })
+    expect(mgr.start()).toEqual({ ok: false, error: 'macOS is blocking Cue' })
+    expect(checkAccess).toHaveBeenCalledWith(['loopback'])
+    expect(captureStart).not.toHaveBeenCalled()
+    expect(providers.size).toBe(0)
+    expect(mgr.isActive()).toBe(false)
   })
 
   it('starts loopback only by default and reaches listening', () => {

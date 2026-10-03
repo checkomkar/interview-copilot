@@ -1,20 +1,27 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { DeepgramProvider } from '../src/main/services/stt/DeepgramProvider'
 
 /** Minimal fake of Deepgram's streaming endpoint. */
-async function fakeDeepgram(opts: { rejectWith?: number } = {}) {
+async function fakeDeepgram(opts: { rejectWith?: number; stallFirst?: boolean } = {}) {
   const http: Server = createServer()
   const wss = new WebSocketServer({ noServer: true })
   const sockets: WebSocket[] = []
   const requests: IncomingMessage[] = []
   const received: (Buffer | string)[] = []
+  const stalled: Duplex[] = []
   http.on('upgrade', (req, socket, head) => {
     requests.push(req)
     if (opts.rejectWith) {
       socket.end(`HTTP/1.1 ${opts.rejectWith} Unauthorized\r\n\r\n`)
+      return
+    }
+    // Never answer the first handshake, like a connection stuck behind a slow VPN.
+    if (opts.stallFirst && requests.length === 1) {
+      stalled.push(socket)
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -31,6 +38,7 @@ async function fakeDeepgram(opts: { rejectWith?: number } = {}) {
     received,
     close: async () => {
       for (const s of sockets) s.terminate()
+      for (const s of stalled) s.destroy()
       wss.close()
       await new Promise((r) => http.close(r))
     }
@@ -110,6 +118,24 @@ describe('DeepgramProvider (against a fake server)', () => {
     await new Promise((r) => setTimeout(r, 700))
     expect(errors).toEqual([['Deepgram API key was rejected', true]])
     expect(srv.requests).toHaveLength(1)
+    await p.stop()
+  })
+
+  it('gives up on a stalled handshake and retries, keeping the audio sent meanwhile', async () => {
+    const srv = await fakeDeepgram({ stallFirst: true })
+    cleanups.push(srv.close)
+    const p = new DeepgramProvider({ ...opts, baseUrl: srv.url, connectTimeoutMs: 300 })
+    const states: string[] = []
+    p.on('state', (st) => states.push(st))
+    p.on('error', () => {})
+    p.start()
+    await until(() => srv.requests.length === 1)
+    p.sendAudio(Buffer.alloc(3200, 2))
+    await until(() => srv.sockets.length === 1, 5000)
+    expect(srv.requests).toHaveLength(2)
+    expect(states).toEqual(['connecting', 'reconnecting', 'reconnecting', 'open'])
+    await until(() => srv.received.length === 1)
+    expect((srv.received[0] as Buffer).length).toBe(3200)
     await p.stop()
   })
 })

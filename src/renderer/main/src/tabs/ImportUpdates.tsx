@@ -14,6 +14,7 @@ import {
   type TaskStatus
 } from '@shared/work'
 import { useApp } from '../store'
+import { isMac, keys } from '../../../shared/keys'
 import { TeamsSyncCard } from './TeamsSyncCard'
 
 const inputCls = 'w-full rounded-md border border-line bg-raised px-3 py-1.5 text-sm outline-none focus:border-accent'
@@ -104,8 +105,9 @@ export function ImportUpdates({ projects, proposals }: { projects: Project[]; pr
       <section className="rounded-xl border border-line bg-panel p-5">
         <h2 className="text-sm font-semibold">Paste or screenshot Teams messages</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted">
-          Copy messages from a Teams group or private chat (select them, Ctrl+C) and paste them here — or paste screenshots of the chat (Win+Shift+S, then
-          Ctrl+V here), several if you scrolled. Cue suggests what changed on your projects and items; nothing changes until you accept it.
+          {keys(
+            `Copy messages from a Teams group or private chat (select them, Ctrl+C) and paste them here — or paste screenshots of the chat (${isMac ? '⌃⌘⇧4' : 'Win+Shift+S'}, then Ctrl+V here), several if you scrolled. Cue suggests what changed on your projects and items; nothing changes until you accept it.`
+          )}
         </p>
         <div className="mt-4 flex flex-col gap-3">
           <textarea

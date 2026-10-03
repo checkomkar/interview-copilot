@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { DisplayInfo, LatencyStage } from '@shared/ipc'
 import {
+  DEEPGRAM_REGIONS,
+  DEEPGRAM_REGION_LABELS,
   STT_PROVIDERS,
   STT_PROVIDER_LABELS,
   LLM_PROVIDERS,
@@ -11,12 +13,14 @@ import {
   modelsFor,
   splitModels,
   type ApiKeyProvider,
+  type DeepgramRegion,
   type HotkeyAction,
   type LlmProviderId,
   type ReasoningEffort,
   type Settings
 } from '@shared/settings'
 import { useApp } from '../store'
+import { isMac, keys } from '../../../shared/keys'
 
 /** Hotkeys from later phases are saved but not bound yet. */
 const CURRENT_PHASE = 4
@@ -114,7 +118,7 @@ function ApiKeysSection() {
   return (
     <Section
       title="API keys"
-      description="Encrypted with Windows DPAPI (Electron safeStorage). Keys never leave the main process except to call the provider."
+      description={`Encrypted with ${isMac ? 'the macOS Keychain' : 'Windows DPAPI'} (Electron safeStorage). Keys never leave the main process except to call the provider.`}
     >
       <ApiKeyRow provider="deepgram" label="Deepgram" hint="Speech-to-text · console.deepgram.com" isSet={keys?.deepgram ?? false} />
       <ApiKeyRow provider="assemblyai" label="AssemblyAI" hint="Speech-to-text · assemblyai.com/dashboard" isSet={keys?.assemblyai ?? false} />
@@ -203,7 +207,14 @@ function AudioSection({ settings }: { settings: Settings }) {
   const labelsHidden = mics.length > 0 && mics.every((d) => !d.label)
 
   return (
-    <Section title="Audio" description="System audio is captured from the default Windows output device via WASAPI loopback. To capture a different device, make it the default in Windows sound settings.">
+    <Section
+      title="Audio"
+      description={
+        isMac
+          ? 'System audio from all apps is captured via macOS screen & system audio recording (macOS 13+). Cue asks for that permission on the first session.'
+          : 'System audio is captured from the default Windows output device via WASAPI loopback. To capture a different device, make it the default in Windows sound settings.'
+      }
+    >
       <Row label="Capture microphone" hint='Shown as "Me" in the transcript'>
         <input
           type="checkbox"
@@ -259,9 +270,20 @@ function SttSection({ settings }: { settings: Settings }) {
           <TextSetting value={stt.assemblyaiModel} onCommit={(assemblyaiModel) => void update({ stt: { assemblyaiModel } })} />
         </Row>
       ) : (
-        <Row label="Model">
-          <TextSetting value={stt.model} onCommit={(model) => void update({ stt: { model } })} />
-        </Row>
+        <>
+          <Row label="Model">
+            <TextSetting value={stt.model} onCommit={(model) => void update({ stt: { model } })} />
+          </Row>
+          <Row label="Region" hint="Try the other region if the transcript is slow to start or keeps reconnecting">
+            <select className={inputCls} value={stt.deepgramRegion} onChange={(e) => void update({ stt: { deepgramRegion: e.target.value as DeepgramRegion } })}>
+              {DEEPGRAM_REGIONS.map((r) => (
+                <option key={r} value={r}>
+                  {DEEPGRAM_REGION_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </Row>
+        </>
       )}
       <Row label="Language">
         <TextSetting value={stt.language} onCommit={(language) => void update({ stt: { language } })} />
@@ -497,7 +519,7 @@ function ScreenSection({ settings }: { settings: Settings }) {
   return (
     <Section
       title="Screen"
-      description="Ctrl+Shift+S captures the screen and answers with a screenshot model — right away, or with the question the interviewer is asking. For long questions, add up to 3 screenshots while scrolling (Ctrl+Alt+S or the overlay camera button), then Answer: they are sent together for one answer. The overlay hides itself for each capture."
+      description={keys('Ctrl+Shift+S captures the screen and answers with a screenshot model — right away, or with the question the interviewer is asking. For long questions, add up to 3 screenshots while scrolling (Ctrl+Shift+Alt+S or the overlay camera button), then Answer: they are sent together for one answer. The overlay hides itself for each capture.')}
     >
       <Row label="Display">
         <select className={inputCls} value={sc.displayId ?? ''} onChange={(e) => void update({ screen: { displayId: e.target.value || null } })}>

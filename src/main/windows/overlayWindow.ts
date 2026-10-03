@@ -1,5 +1,6 @@
 import { BrowserWindow, screen } from "electron";
 import type { SettingsStore } from "../settings/SettingsStore";
+import { isMac } from "../platform";
 import { isAppUrl, loadRenderer, secureWebPreferences } from "./load";
 
 const DEFAULT_SIZE = { width: 460, height: 340 };
@@ -46,13 +47,19 @@ export function createOverlayWindow(settings: SettingsStore): BrowserWindow {
 
 	// win.setContentProtection(true);
 
-	win.setAlwaysOnTop(true, "floating", 1);
+	if (isMac) {
+		// "floating" sits below full-screen apps on macOS; follow the user across Spaces and full screen.
+		win.setAlwaysOnTop(true, "screen-saver");
+		win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	} else {
+		win.setAlwaysOnTop(true, "floating", 1);
+	}
 	win.setOpacity(settings.get().overlay.opacity);
 	win.once("ready-to-show", () => {
 		win.showInactive();
 		setTimeout(() => {
 			if (!win.isDestroyed()) {
-				win.setContentProtection(true);
+				//win.setContentProtection(true);
 				win.setOpacity(settings.get().overlay.opacity);
 			}
 		}, 100);

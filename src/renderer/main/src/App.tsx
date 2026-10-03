@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { NavigateTarget } from '@shared/ipc'
 import { useApp } from './store'
+import { keys } from '../../shared/keys'
 import { SessionTab } from './tabs/SessionTab'
 import { SettingsTab } from './tabs/SettingsTab'
 import { ProfileTab } from './tabs/ProfileTab'
@@ -63,7 +64,7 @@ export function App() {
           <button
             onClick={() => void window.api.ui.quit()}
             className="cursor-pointer text-[11px] text-muted hover:text-bad transition-colors"
-            title="Quit Cue completely (Ctrl+Shift+Q)"
+            title={keys("Quit Cue completely (Ctrl+Shift+Q)")}
           >
             Quit
           </button>

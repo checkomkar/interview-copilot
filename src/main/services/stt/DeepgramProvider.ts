@@ -1,3 +1,4 @@
+import type { DeepgramRegion } from '@shared/settings'
 import { createLogger } from '../../logger'
 import { SocketSttProvider } from './SocketSttProvider'
 
@@ -9,11 +10,15 @@ export interface DeepgramOptions {
   language: string
   endpointingMs: number
   utteranceEndMs: number
+  /** Endpoint region; default US. */
+  region?: DeepgramRegion
   sampleRate?: number
   /** Label used in logs only. */
   label?: string
   /** Override for tests. */
   baseUrl?: string
+  /** Override for tests. */
+  connectTimeoutMs?: number
 }
 
 export type DeepgramEvent =
@@ -53,6 +58,8 @@ export function parseDeepgramMessage(raw: string): DeepgramEvent {
   }
 }
 
+const HOSTS: Record<DeepgramRegion, string> = { us: 'api.deepgram.com', eu: 'api.eu.deepgram.com' }
+
 export function buildDeepgramUrl(o: DeepgramOptions): string {
   const params = new URLSearchParams({
     model: o.model,
@@ -67,7 +74,7 @@ export function buildDeepgramUrl(o: DeepgramOptions): string {
     utterance_end_ms: String(o.utteranceEndMs),
     vad_events: 'true'
   })
-  return `${o.baseUrl ?? 'wss://api.deepgram.com/v1/listen'}?${params.toString()}`
+  return `${o.baseUrl ?? `wss://${HOSTS[o.region ?? 'us']}/v1/listen`}?${params.toString()}`
 }
 
 /** Deepgram streaming over a raw WebSocket (FR-S2); connection handling lives in SocketSttProvider. */
@@ -75,7 +82,7 @@ export class DeepgramProvider extends SocketSttProvider {
   protected readonly service = 'Deepgram'
 
   constructor(private readonly opts: DeepgramOptions) {
-    super({ sampleRate: opts.sampleRate, label: opts.label })
+    super({ sampleRate: opts.sampleRate, label: opts.label, connectTimeoutMs: opts.connectTimeoutMs })
   }
 
   protected url(): string {

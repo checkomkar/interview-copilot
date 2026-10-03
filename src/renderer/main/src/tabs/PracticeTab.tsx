@@ -12,6 +12,7 @@ import {
 import { STT_PROVIDER_LABELS, type Settings } from '@shared/settings'
 import { Markdown } from '../../../shared/Markdown'
 import { useApp } from '../store'
+import { keys } from '../../../shared/keys'
 import { LevelMeter } from '../components/LevelMeter'
 
 const ROUND_HINT: Record<PracticeRound, string> = {
@@ -351,9 +352,9 @@ function RunScreen({ state, settings, busy, act }: { state: PracticeState; setti
             autoFocus
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && e.ctrlKey && draft.trim() && submitTyped()}
+            onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && draft.trim() && submitTyped()}
             rows={7}
-            placeholder="Type your answer… (Ctrl+Enter to submit)"
+            placeholder={keys('Type your answer… (Ctrl+Enter to submit)')}
             className="rounded-lg border border-line bg-raised px-3.5 py-2.5 text-sm leading-relaxed"
           />
           <div className="flex gap-3">

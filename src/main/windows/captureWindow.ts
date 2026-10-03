@@ -17,7 +17,7 @@ export function createCaptureWindow(): BrowserWindow {
     webPreferences: secureWebPreferences({ backgroundThrottling: false })
   })
 
-  // System audio via WASAPI loopback (FR-A1). Chromium requires a video source
+  // System audio via loopback (FR-A1): WASAPI on Windows, ScreenCaptureKit on macOS 13+. Chromium requires a video source
   // alongside it; the capture page stops the video track immediately.
   win.webContents.session.setDisplayMediaRequestHandler(
     async (request, callback) => {

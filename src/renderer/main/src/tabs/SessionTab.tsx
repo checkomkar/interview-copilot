@@ -4,6 +4,7 @@ import { useApp } from '../store'
 import { LevelMeter } from '../components/LevelMeter'
 import { Transcript } from '../components/Transcript'
 import { formatHotkey } from '../format'
+import { isMac, keys } from '../../../shared/keys'
 
 function formatElapsed(ms: number): string {
   const total = Math.floor(ms / 1000)
@@ -107,9 +108,9 @@ export function SessionTab() {
         {micOn && <LevelMeter label="Me (mic)" level={levels.mic} active={active} color="var(--color-me)" />}
         <p className="text-[11px] text-muted">
           {work
-            ? 'Work Mode: when someone asks for a status update, the overlay writes one from your Projects. Ctrl+Shift+Space picks a project yourself. '
+            ? keys('Work Mode: when someone asks for a status update, the overlay writes one from your Projects. Ctrl+Shift+Space picks a project yourself. ')
             : 'Interview Mode: questions are answered from your Profile. '}
-          Captures system audio from your default Windows output device.
+          {isMac ? 'Captures system audio from your Mac (all apps).' : 'Captures system audio from your default Windows output device.'}
           {!micOn && ' Microphone capture is off (enable it in Settings).'}
         </p>
       </section>

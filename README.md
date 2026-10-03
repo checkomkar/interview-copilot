@@ -1,6 +1,6 @@
 # Cue
 
-Personal Windows desktop app that listens to call audio, transcribes it live and shows concise, streamed answers in an always-on-top overlay. See [PRD-cue.md](PRD-cue.md).
+Personal desktop app for Windows and macOS that listens to call audio, transcribes it live and shows concise, streamed answers in an always-on-top overlay. See [PRD-cue.md](PRD-cue.md).
 
 Cue has two modes, picked on the Session tab before a session starts:
 
@@ -8,15 +8,17 @@ Cue has two modes, picked on the Session tab before a session starts:
 - **Interview Mode** — interview questions answered from your resume and job description, plus Practice.
  Cue was called *Interview Copilot* until v1.0; on first start it moves `%APPDATA%\InterviewCopilot` to `%APPDATA%\Cue`.
 
-**Status: Interview Mode v1.0 (Phases 1–4)** — live transcript (Deepgram or AssemblyAI), question detection and streamed answers in the overlay (Groq by default, with OpenRouter / Gemini / Anthropic and automatic failover), typed and voice questions, the Profile tab, screenshot answers, a live cost meter with a session cap, saved session History with Markdown export, **Practice Mode** (mock interviews with spoken questions and scored feedback) and a Windows installer.
+**Status: Interview Mode v1.0 (Phases 1–4)** — live transcript (Deepgram or AssemblyAI), question detection and streamed answers in the overlay (Groq by default, with OpenRouter / Gemini / Anthropic and automatic failover), typed and voice questions, the Profile tab, screenshot answers, a live cost meter with a session cap, saved session History with Markdown export, **Practice Mode** (mock interviews with spoken questions and scored feedback) and installers for Windows and macOS.
 
 ## Install
 
 Run `dist\Cue-Setup-1.0.0.exe` (build it with `npm run dist`). It installs per user (no admin), lets you pick the folder, and adds Start menu and desktop shortcuts. The installer is unsigned, so Windows SmartScreen may warn — choose **More info → Run anyway**. If you installed the older *Interview Copilot* build, uninstall it from Windows Settings → Apps (your data is kept and moved to Cue). Uninstalling keeps your data in `%APPDATA%\Cue` (use **Settings → Data → Delete all data** first to remove it).
 
+**macOS (13 Ventura or later):** open `dist/Cue-1.0.0-arm64.dmg` (Apple silicon) or `-x64.dmg` (Intel) — build them with `npm run dist:mac` — and drag Cue to Applications. The app is ad-hoc signed, not notarized, so the first launch is blocked: right-click Cue → **Open** (or `xattr -dr com.apple.quarantine /Applications/Cue.app`). See [macOS notes](#macos-notes) for permissions.
+
 ## Setup
 
-Requirements: Windows 10/11, Node.js 20+.
+Requirements: Windows 10/11 or macOS 13+, Node.js 20+.
 
 ```sh
 npm install
@@ -45,7 +47,7 @@ Open **Settings → API keys** and paste:
 
 A session needs a key for the speech-to-text provider picked in **Settings → Speech-to-text** (Deepgram or AssemblyAI) plus a key for the main answer provider or one of its backups (**Settings → Answers**).
 
-Keys are encrypted with Electron `safeStorage` (Windows DPAPI) into `%APPDATA%\Cue\secrets.json`. They are only decrypted in the main process, are never sent to the renderer windows, and are redacted from logs.
+Keys are encrypted with Electron `safeStorage` (Windows DPAPI / macOS Keychain) into `secrets.json` in the [data folder](#data-locations). They are only decrypted in the main process, are never sent to the renderer windows, and are redacted from logs.
 
 ## Using it
 
@@ -87,7 +89,7 @@ The Session tab and the overlay footer show the running cost of the current sess
 
 **Practice** runs a mock interview. Pick a round (behavioral, technical, system design or mixed) and 5, 10 or 15 questions; they're written from your resume and job description (so save the Profile first).
 
-1. Each question is shown and read aloud (Windows voices via the Web Speech API; voice and speed are on the Practice tab). When it has been read, recording starts — or click **Answer out loud**.
+1. Each question is shown and read aloud (system voices via the Web Speech API; voice and speed are on the Practice tab). When it has been read, recording starts — or click **Answer out loud**.
 2. Answer as you would in the interview; the transcript appears as you speak. Click **Done answering** (or **Type instead** / **Edit as text**).
 3. You get a score out of 10, strengths, what to improve and a stronger version of your answer. **Try this one again** or **Next question**; **Skip question** moves on.
 4. After the last question (or **End practice**) a short debrief is written. The run — every question, your answer and its feedback, the debrief and the average score — is saved to History and exports to Markdown.
@@ -118,7 +120,7 @@ Every session is saved to `%APPDATA%\Cue\data.db` (SQLite): the transcript, each
 Developers' status, blockers and bug ownership usually live in Teams chats. **Projects → Updates from Teams** turns them into suggested changes you review — nothing changes until you **Accept** (or **Edit**, or **Skip**; **Accept all** for many).
 
 - **Paste**: select messages in a Teams group or private chat, `Ctrl+C`, paste, **Find updates**. Works with any Teams account.
-- **Screenshots**: `Win+Shift+S`, then `Ctrl+V` into the box (up to 8, in scroll order), or **Add screenshot files…**. Read by the screenshot (vision) models.
+- **Screenshots**: `Win+Shift+S` (macOS: `⌃⌘⇧4`), then `Ctrl+V` into the box (up to 8, in scroll order), or **Add screenshot files…**. Read by the screenshot (vision) models.
 - **Teams sync** (work or school accounts): Cue checks the chats you follow every few minutes and adds suggestions automatically. Needs your organisation's app registration — the card shows the steps (public client, delegated `User.Read`, `Chat.Read`, `offline_access`; channels also need `ChannelMessage.Read.All` with admin consent). Sign-in uses a code you enter at Microsoft's sign-in page; the token is stored encrypted like the API keys. Personal and free Teams accounts can't be read by apps (Microsoft's rule) — use paste or screenshots for those.
 - Each suggestion shows the message, who sent it and when, and what changes ("Owner: — → Ravi Kumar", "Status: To do → In progress"); a newly reported bug becomes a new item. The same message seen twice is suggested once.
 - Messages are sent to your answer provider to be read. Free tiers may log or train on what they're sent — use a paid provider for company chats, and check what your company allows.
@@ -172,7 +174,7 @@ Differences from the direct Anthropic API: thinking is set per provider with **R
 
 ### Hotkeys
 
-All are global and rebindable in **Settings → Global hotkeys** (Electron accelerator syntax).
+All are global and rebindable in **Settings → Global hotkeys** (Electron accelerator syntax). Shortcuts are written Windows-style throughout this README; on macOS, `Ctrl` is `⌘` (`Ctrl+Shift+Enter` → `⌘⇧↩`), and the app shows the macOS symbols.
 
 | Action | Default | Available |
 |---|---|---|
@@ -195,14 +197,14 @@ Closing the main window hides it to the system tray — the overlay, hotkeys and
 
 ### When things go wrong
 
-- **Speech service drops:** the status turns amber and it reconnects on its own (up to 8 tries over ~40 s, buffering 5 s of audio), so a network drop of up to 30 s resumes by itself. After 3 failed tries in a row the overlay says so.
+- **Speech service drops:** the status turns amber and it reconnects on its own (up to 8 tries over ~40 s, buffering 15 s of audio), so a network drop of up to 30 s resumes by itself. A handshake that hasn't finished in 20 s, or an open connection whose audio stops draining for 8 s, is retried. After 3 failed tries in a row the overlay says so. If the transcript is slow to start or keeps reconnecting with Deepgram, switch **Settings → Speech-to-text → Region** (US / EU): some networks reach one far better than the other.
 - **A window crashes:** it is reloaded; if the hidden audio-capture page crashes, the session stops with a message so you can start it again.
 - **Answer provider fails:** the next model / backup provider answers (see *Answer providers* above).
-- Everything is logged to `%APPDATA%\Cue\logs\` with keys redacted.
+- Everything is logged to the data folder's `logs/` with keys redacted.
 
 ### Data locations
 
-`%APPDATA%\Cue\`
+`%APPDATA%\Cue\` on Windows, `~/Library/Application Support/Cue/` on macOS
 - `settings.json` — non-secret settings
 - `secrets.json` — encrypted API keys
 - `profile.json` — resume/JD text, notes and their summaries
@@ -223,7 +225,8 @@ Closing the main window hides it to the system tray — the overlay, hotkeys and
 | `npm run build` | Production bundle into `out/` |
 | `npm start` | Run the production bundle |
 | `npm run dist` | Build the NSIS installer, `dist/Cue-Setup-<version>.exe` (x64, per-user, unsigned) |
-| `npm run icon` | Redraw `build/icon.png` (the app icon) |
+| `npm run dist:mac` | Build `dist/Cue-<version>-{x64,arm64}.dmg` and `.zip` (ad-hoc signed, hardened runtime; run on a Mac) |
+| `npm run icon` | Redraw `build/icon.png` (Windows) and `build/icon-mac.png` (macOS, made into `.icns` by electron-builder) |
 | `npm run mock-teams` | Local stand-in for Teams sign-in and Microsoft Graph, at `http://localhost:4100` (`MOCK_TEAMS_PORT` to change) |
 
 Set `CUE_DATA` to a folder to run the app (dev or packaged) with its own data folder — for testing without touching your real profile, and without colliding with a running copy.
@@ -263,3 +266,12 @@ tests/                      Vitest
 ```
 
 Security: context isolation on, sandboxed renderers, `nodeIntegration` off, strict CSP, IPC accepted only from app pages, and audio IPC only from the capture window.
+
+## macOS notes
+
+- **Permissions.** System audio is captured through macOS screen & system audio recording (ScreenCaptureKit), so the first session asks for **Screen & System Audio Recording**; screenshots use the same permission. The mic ("Me" lane, voice questions, Practice) asks for **Microphone**. After granting screen recording, quit and reopen Cue. If access was denied, starting a session opens the right pane in System Settings → Privacy & Security.
+- **Rebuilt app = re-grant.** macOS ties the permission to the app's signature; ad-hoc signed builds get a new one each build, so re-enable Cue in System Settings after installing a new build. Signing with a Developer ID (`CSC_NAME`, plus notarization) avoids this.
+- **In development** (`npm run dev`) the permissions belong to the app you launch from — your terminal or VS Code — not to Cue.
+- **Overlay** floats over full-screen apps and follows you across Spaces. Content protection hides it from most screen sharing, but some recent ScreenCaptureKit-based recorders on macOS 15+ can still capture it — check with your meeting app before relying on it.
+- **Hotkeys** use `⌘` where Windows uses `Ctrl`. A few defaults overlap common macOS shortcuts while Cue runs (`⌘⇧Q` log out, `⌘⇧H`/`⌘⇧D`/`⌘⇧A`/`⌘⇧O` in Finder, `⌘⇧S` Save As); rebind them in Settings if they get in the way. A shortcut another app already owns is reported as not registered.
+- **Practice voices** come from the macOS system voices (System Settings → Accessibility → Spoken Content adds more).

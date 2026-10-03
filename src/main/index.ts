@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { ZodError } from 'zod'
+import { audioAccessProblem, isMac, screenAccessProblem } from './platform'
 import {
   ApiKeySetSchema,
   AudioChunkSchema,
@@ -315,6 +316,8 @@ app.whenReady().then(() => {
   const screens = new ScreenService()
   /** The overlay is faded out for a hotkey screenshot so it doesn't cover what's behind it. */
   const captureScreen = async ({ manual }: { manual: boolean }) => {
+    const accessError = screenAccessProblem()
+    if (accessError) throw new Error(accessError)
     const { displayId, maxEdgePx } = settings.get().screen
     const overlay = overlayWindow
     const fade = manual && overlay !== null && !overlay.isDestroyed() && overlay.isVisible()
@@ -444,6 +447,7 @@ app.whenReady().then(() => {
           apiKey,
           label: source,
           model: s.stt.model,
+          region: s.stt.deepgramRegion,
           language: s.stt.language,
           endpointingMs: s.stt.endpointingMs,
           utteranceEndMs: s.stt.utteranceEndMs
@@ -459,7 +463,8 @@ app.whenReady().then(() => {
       const s = settings.get()
       if (history.currentId()) cost.addStt(s.stt.provider, sttModel(s), seconds)
     },
-    getCost: () => cost.total()
+    getCost: () => cost.total(),
+    checkAccess: audioAccessProblem
   }
   const sessionManager = new SessionManager(audioDeps)
   /** Practice Mode listens to the mic alone; it never runs alongside a live session. */
@@ -853,6 +858,8 @@ app.whenReady().then(() => {
   // System tray icon disabled (controls available via overlay header and Ctrl+Shift+O / Ctrl+Shift+Q)
 
   app.on('second-instance', () => navigate('session'))
+  // macOS: clicking the Dock icon brings the hidden dashboard back (there is no tray).
+  if (isMac) app.on('activate', () => showMainWindow())
   app.on('will-quit', () => {
     hotkeys.dispose()
     teams.dispose()

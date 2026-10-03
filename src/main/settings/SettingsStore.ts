@@ -22,7 +22,7 @@ const SECRET_PREFIX = 'secret:'
 
 /**
  * Non-secret settings live in settings.json. API keys are encrypted with
- * Electron safeStorage (DPAPI on Windows) and stored base64 in secrets.json.
+ * Electron safeStorage (DPAPI on Windows, Keychain on macOS) and stored base64 in secrets.json.
  * Plaintext keys only ever exist in main-process memory.
  */
 export class SettingsStore extends EventEmitter {
