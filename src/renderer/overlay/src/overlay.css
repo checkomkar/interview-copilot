@@ -4,6 +4,12 @@ body.overlay {
   overflow: hidden;
 }
 
+/* Force standard default mouse pointer across all overlay interactions */
+body.overlay,
+body.overlay * {
+  cursor: default !important;
+}
+
 .ov {
   background: var(--ov-bg);
   color: var(--ov-fg);

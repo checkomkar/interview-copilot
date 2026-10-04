@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { DisplayInfo, LatencyStage } from '@shared/ipc'
 import {
-  DEEPGRAM_REGIONS,
-  DEEPGRAM_REGION_LABELS,
   STT_PROVIDERS,
   STT_PROVIDER_LABELS,
   LLM_PROVIDERS,
@@ -13,7 +11,6 @@ import {
   modelsFor,
   splitModels,
   type ApiKeyProvider,
-  type DeepgramRegion,
   type HotkeyAction,
   type LlmProviderId,
   type ReasoningEffort,

@@ -1,6 +1,6 @@
 # Product Requirement Document (PRD): Cue SaaS Platform
 
-**Document Version:** 1.0  
+**Document Version:** 1.1  
 **Target Release:** v1.0 SaaS MVP  
 **Architecture:** Hybrid Desktop Client (Electron) + Cloud AI Proxy & Billing Backend  
 
@@ -17,8 +17,10 @@ In the original standalone version (v1.0), users provided their own API keys (An
 ### 1.3 Key Objectives
 - **Frictionless Onboarding:** Users sign up, subscribe via Stripe / Lemon Squeezy, download the desktop app, log in with one click via deep-link, and immediately start sessions.
 - **API Key Security & IP Protection:** All upstream vendor keys (Deepgram, Anthropic, OpenAI, Groq) remain protected in the cloud backend.
+- **Zero-Trust Client Anti-Tamper:** Client-side binary tampering (e.g. flipping `isPaid = true` in Electron `.asar`) is fundamentally powerless; transcription and answers only exist server-side.
 - **Accurate Real-Time Metering:** Live session audio and generation requests are metered in seconds and tokens, stopping gracefully when balances expire.
 - **High Gross Margins (>85%):** Efficient model routing (free/fast models for classification and synthesis; premium models for complex reasoning) paired with hourly pricing safeguards profitability.
+- **Zero-Cost Pre-Launch Development:** The entire SaaS infrastructure runs on generous free tiers during development, incurring \$0.00 until public sales commence.
 
 ---
 
@@ -189,7 +191,7 @@ stateDiagram-v2
     "id": "usr_9918231",
     "email": "user@example.com",
     "subscription": {
-      "status": "active", // "active", "trial", "expired", "none"
+      "status": "active",
       "plan": "sprint_pass",
       "validUntil": "2026-10-10T23:59:59Z"
     },
@@ -277,15 +279,54 @@ stateDiagram-v2
 
 ---
 
-## 8. Security, Privacy & Compliance (Enterprise & Candidates)
+## 8. Security, Privacy & Anti-Tamper Defense
 
+```mermaid
+flowchart TD
+    subgraph Client ["Client Environment (Untrusted / Attack Surface)"]
+        Hacker[Attacker decompiles app.asar] -->|Changes code to isPaid = true| ModdedApp[Tampered Electron Client]
+        ModdedApp -->|Requests AI Session + Sends JWT| CloudProxy[Cue Cloud Proxy Gateway]
+    end
+
+    subgraph Backend ["Server Environment (Protected & Authoritative)"]
+        CloudProxy --> AuthCheck{Cryptographic JWT Check}
+        AuthCheck -->|Invalid Token| RejectAuth[401 Unauthorized]
+        AuthCheck -->|Valid Token| DBCheck{Query Database Credit Ledger}
+        DBCheck -->|Credits == 0 / Expired| RejectBilling[402 Payment Required · Drop Socket]
+        DBCheck -->|Credits > 0| InjectKeys[Inject Master API Keys & Stream]
+        InjectKeys --> VendorAPIs[Deepgram & Claude Upstream APIs]
+    end
+```
+
+### 8.1 Zero-Trust Client ("Dumb Terminal") Architecture
+In an Electron application, local client-side verification (e.g. `if (user.isPaid)`) can easily be modified by unpacking the `.asar` archive. Cue's architecture uses a **Zero-Trust Client model**:
+1. **Zero Client-Side Keys:** The desktop binary contains **zero** upstream AI provider keys or secrets.
+2. **Zero Client Intelligence:** The desktop app cannot transcribe audio or generate an answer on its own.
+3. **Server-Enforced Access Gate:** Even if an attacker patches the desktop JavaScript to always display an unlocked UI, the server checks the database ledger on every WebSocket connection:
+   ```sql
+   SELECT live_seconds_remaining FROM user_credits WHERE user_id = auth.uid();
+   ```
+   If the balance is 0 or expired, the server **immediately drops the WebSocket (code 4002 / Payment Required)**. The modified app receives no speech-to-text and no answers.
+
+### 8.2 Cryptographic Session Tokens
+- Auth tokens are cryptographically signed asymmetric JWTs (RS256 / Ed25519) issued by the auth provider.
+- Short lifespan: **1 hour**. Client refreshes tokens via secure HTTP-only cookies or encrypted refresh tokens stored in Windows DPAPI (`safeStorage`).
+- Revocation: Terminating a subscription or banning an account invalidates refresh tokens instantly.
+
+### 8.3 Concurrency & Account-Sharing Prevention
+- A user cannot purchase a \$19 pass and share credentials with multiple candidates.
+- When `POST /v1/session/start` is called, the server writes an active session lock to Redis:
+  ```text
+  SET active_session:<user_id> <session_id> EX 18000
+  ```
+- If a second device attempts to initiate audio streaming under the same account, the connection is rejected:
+  `"Active session underway on another device. Concurrency limit reached."`
+
+### 8.4 Privacy & Compliance
 1. **Zero Audio Retention Policy:**
-   - Audio is buffered in RAM purely to forward over TLS WebSocket to the STT provider. Audio is **never recorded to disk, log files, or S3 buckets**.
-2. **Provider Data Protection:**
-   - Commercial agreements with Deepgram and Anthropic/OpenAI ensuring **zero data training** on customer prompts or transcriptions.
-3. **Anti-Abuse & Multi-Accounting:**
-   - Single-session concurrency lock: a user cannot run live sessions simultaneously on multiple PCs with the same login.
-   - Strict rate-limiting on LLM generation (max 10 questions / min) to prevent automated scrapers.
+   - Audio is buffered in RAM purely to forward over TLS WebSocket to the STT provider. Audio is **never written to disk, log files, or S3 buckets**.
+2. **Provider Data Protection Agreements:**
+   - Commercial tier terms with Deepgram and Anthropic/OpenAI ensure **zero training on customer prompts or audio**.
 
 ---
 
@@ -307,7 +348,47 @@ stateDiagram-v2
 
 ---
 
-## 10. Phased Implementation Roadmap
+## 10. Development & Operating Cost Structure ($0 Pre-Launch Strategy)
+
+### 10.1 The $0 Pre-Launch Development Stack
+The entire SaaS platform can be developed, tested, and staged at **\$0.00 cost** by utilizing developer free tiers:
+
+| Component | Provider | Developer Free-Tier Allowance | Pre-Launch Cost |
+| :--- | :--- | :--- | :--- |
+| **Authentication & Database** | **Supabase** | • 50,000 Monthly Active Users<br>• 500 MB PostgreSQL database<br>• Full Google OAuth & Magic Links | **\$0.00** |
+| **Payments & Invoicing** | **Stripe / Lemon Squeezy** | • Full Sandbox / Test Mode<br>• Unlimited simulated charges & webhook test triggers | **\$0.00** |
+| **Web Dashboard & Landing** | **Vercel** | • Unlimited deployments<br>• Free SSL certificate & `.vercel.app` subdomain | **\$0.00** |
+| **Backend API / AI Proxy** | **Localhost** *(Dev)*<br>or **Render / Fly.io** | • Run locally on PC during building (`localhost:8000`)<br>• Free cloud tier for staging tests | **\$0.00** |
+| **Speech-to-Text (STT)** | **Deepgram** | • **\$200 free credit** on registration (~750 hours of audio transcription) | **\$0.00** |
+| **LLM Inference** | **Groq & Google AI Studio** | • Groq: Generous free daily quota (Llama 3.3 / Qwen)<br>• Gemini 2.0 Flash: Free tier on Google AI Studio | **\$0.00** |
+| **Desktop Client** | **Electron** | • Open source, builds locally on Windows | **\$0.00** |
+| **Total Pre-Launch Cost** | | | **\$0.00** |
+
+### 10.2 Post-Launch Costs (Incurred Only Upon Going Live)
+1. **Custom Domain:** ~\$10 / year (e.g. `getcue.app` on Cloudflare Registrar).
+2. **Merchant Fee (Per Transaction):**
+   - Stripe: `2.9% + $0.30` per successful charge.
+   - Lemon Squeezy (Merchant of Record): `5% + $0.50` per charge (handles all global VAT/sales tax).
+   - *Fee is deducted directly from customer payments — never paid upfront.*
+3. **Windows Code Signing Certificate (Optional at MVP launch):** ~\$150–\$250 / year. (Can be deferred until first 5–10 paying customers by providing install guidance).
+
+### 10.3 Post-Launch Unit Economics & Margins
+Because raw transcription and fast LLM inference are extremely affordable, profit margins exceed 90%:
+
+- **Customer Purchases a 24-Hour Pass:** **+\$19.00**
+- **COGS for 2 Active Hours of Live Calls (120 minutes):**
+  - Deepgram Nova-3 Audio Transcription (120 mins @ \$0.0043/min): -\$0.52
+  - Fast LLM Answers (15 questions via Groq / Nitro models): -\$0.06
+  - Payment Processing Fee (Lemon Squeezy): -\$1.45
+- **Net Profit per \$19 Sale:** **~\$16.97 (89.3% Net Margin)**
+
+### 10.4 Repository Separation Strategy
+- **Current Repository (`d:\Projects\interview-help`):** Kept as a standalone, local-first utility with Bring-Your-Own-Key support for private use and testing.
+- **Commercial SaaS Repository (`d:\Projects\cue-saas`):** Dedicated commercial codebase with managed cloud authentication, AI proxy integration, in-app paywall, and automated distribution.
+
+---
+
+## 11. Phased Implementation Roadmap
 
 ```mermaid
 gantt

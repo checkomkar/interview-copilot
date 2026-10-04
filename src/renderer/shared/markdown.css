@@ -174,7 +174,7 @@
   border: 1px solid var(--ov-line);
   border-radius: 4px;
   padding: 0 0.4em;
-  cursor: pointer;
+  cursor: default !important;
 }
 .md-diagram-toggle:hover {
   color: var(--ov-fg);

@@ -19,6 +19,23 @@
   --color-me: #c792ea;
 }
 
+/* Maintain standard default mouse pointer throughout the entire application */
+*,
+*::before,
+*::after,
+html,
+body,
+input,
+textarea,
+select,
+button,
+a,
+label,
+code,
+pre {
+  cursor: default !important;
+}
+
 html,
 body,
 #root {

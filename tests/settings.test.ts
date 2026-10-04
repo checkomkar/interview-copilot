@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, SettingsSchema, mergeSettings, upgradeSettings, sttMo
 
 describe('settings schema', () => {
   it('produces PRD §8 defaults from an empty object', () => {
-    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', language: 'en', endpointingMs: 300, utteranceEndMs: 1000, openrouterModel: 'openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3', groqModel: 'whisper-large-v3-turbo, whisper-large-v3', fallbackProviders: ['assemblyai', 'groq', 'openrouter'] })
+    expect(DEFAULT_SETTINGS.stt).toEqual({ provider: 'deepgram', model: 'nova-3', assemblyaiModel: 'universal-streaming-english', deepgramRegion: 'us', language: 'en', endpointingMs: 300, utteranceEndMs: 1000, openrouterModel: 'openai/whisper-large-v3-turbo, openai/gpt-4o-mini-transcribe, openai/whisper-large-v3', groqModel: 'whisper-large-v3-turbo, whisper-large-v3', fallbackProviders: ['assemblyai', 'groq', 'openrouter'] })
   })
 
   it('orders STT providers: main first, then backups, without duplicates', () => {
